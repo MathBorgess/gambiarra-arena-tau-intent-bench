@@ -9,6 +9,7 @@ export const RUNNERS = {
   ollama:   { defaultUrl: 'http://localhost:11434' },
   lmstudio: { defaultUrl: 'http://localhost:1234' },
   llamacpp: { defaultUrl: 'http://localhost:8080' },
+  ollaya:   { defaultUrl: 'http://localhost:11435' },
 };
 
 class BaseRunner {
@@ -92,7 +93,43 @@ export class LlamaCppRunner extends BaseRunner {
   }
 }
 
+// Ollaya roda modelos de DECISÃO: não gera texto, responde perguntas tipadas
+// ("choice") com confiança. Só serve para o modo World, onde cada pulso é
+// escolher uma direção. Os critérios usam as mesmas palavras do radar do
+// servidor ("comida mais próxima a NE"), e o state é SÓ o trecho da comida:
+// no ensaio de 29/09 o laya acertou 24/24 assim, contra 9 a 14/24 com o radar
+// inteiro (o "parede a NORTE" puxava a escolha para N ou STAY). ~30 ms/decisão.
+export const DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+export function foodClause(radar) {
+  const m = (radar || '').match(/comida mais próxima a [A-Z]+ \([^)]*\)|nenhuma comida à vista/);
+  return m ? m[0] : (radar || '');
+}
+
+export class OllayaRunner extends BaseRunner {
+  async test() {
+    try {
+      const r = await fetch(`${this.baseUrl}/v1/models`); if (!r.ok) throw new Error('status ' + r.status);
+      const d = await r.json(); Log.ok(`Ollaya ok. Modelos: ${d.models?.map(m => m.name).join(', ') || 'nenhum'}`);
+    } catch (e) { if (e.message.includes('fetch') || e.name === 'TypeError') { Err.corsHelp('ollaya'); throw new Error(`Sem conexão com Ollaya em ${this.baseUrl}.`); } throw e; }
+  }
+  async generate() { throw new Error('Ollaya não gera texto: use-o no modo World (/agent)'); }
+  async decide(radar, instructions) {
+    const state = foodClause(radar);
+    const criteria = Object.fromEntries(DIRECTIONS.map(d => [d, `a comida mais próxima está a ${d}`]));
+    criteria.STAY = 'nenhuma comida à vista';
+    const r = await fetch(`${this.baseUrl}/v1/systemone`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.model, state, questions: { direcao: { type: 'choice', instructions, criteria } } }),
+    });
+    if (!r.ok) throw new Error('Ollaya ' + r.status + ': ' + await r.text());
+    const d = await r.json(); const a = d.answers?.direcao || {};
+    return { dir: a.choice, confidence: a.confidence ?? 0, probabilities: a.probabilities || {}, model: d.model, state };
+  }
+}
+
 export function makeRunner(type, url, model) {
+  if (type === 'ollaya') return new OllayaRunner(url, model);
   return type === 'lmstudio' ? new LMStudioRunner(url, model) : type === 'llamacpp' ? new LlamaCppRunner(url, model) : new OllamaRunner(url, model);
 }
 
@@ -105,6 +142,10 @@ export async function discoverModels(runnerType, baseUrl) {
   if (runnerType === 'lmstudio' || runnerType === 'llamacpp') {
     const r = await fetch(base + '/v1/models'); if (!r.ok) throw new Error('status ' + r.status);
     const d = await r.json(); return (d.data || []).map((m) => m.id);
+  }
+  if (runnerType === 'ollaya') {
+    const r = await fetch(base + '/v1/models'); if (!r.ok) throw new Error('status ' + r.status);
+    const d = await r.json(); return (d.models || []).map((m) => m.name);
   }
   const r = await fetch(base + '/api/tags'); if (!r.ok) throw new Error('status ' + r.status);
   const d = await r.json(); return (d.models || []).map((m) => m.name);

@@ -84,6 +84,7 @@
               <option value="ollama">Ollama</option>
               <option value="lmstudio">LM Studio</option>
               <option value="llamacpp">llama.cpp</option>
+              <option value="ollaya">Ollaya (modelo de decisão)</option>
             </select>
           </div>
           <div class="fg"><label for="llm-url">URL do LLM</label><input id="llm-url" type="text"></div>
@@ -321,6 +322,7 @@
   async function decide(p) {
     if (S.deciding) return;
     S.deciding = true; setStatus('playing');
+    if (runner.decide) { await decideTyped(p); S.deciding = false; return; }
     const prompt = buildPrompt(p, S);
     $('io-prompt').textContent = prompt;
     $('io-raw').textContent = '';
@@ -367,6 +369,32 @@
     console.groupEnd();
     Log.info(`#${p.pulse} → ${finalDir} (${ms}ms${S.think?', com raciocínio':''})`);
     S.deciding = false;
+  }
+
+  // Modelo de decisão (Ollaya): o radar vira o "state" e a direção sai como
+  // escolha tipada, sem texto para interpretar. O balão mostra a confiança.
+  async function decideTyped(p) {
+    const instructions = `Objetivo: ${p.objective || 'coletar comida'}. Para qual direção o agente deve se mover?`;
+    $('io-prompt').textContent = `RADAR: ${p.radar_text}\nPERGUNTA: ${instructions}`;
+    $('io-think-box').style.display = 'none';
+    const t0 = performance.now();
+    let res;
+    try { res = await runner.decide(p.radar_text || '', instructions); }
+    catch(e) {
+      Log.err('decisão falhou: '+e.message); Err.show('Erro na decisão: '+e.message,'error',6000);
+      $('io-parse').textContent = 'erro na decisão'; $('io-parse').style.color = 'var(--error)';
+      return;
+    }
+    const ms = Math.round(performance.now()-t0);
+    const finalDir = res.dir || 'STAY';
+    const finalSay = `${Math.round(res.confidence*100)}% de certeza`;
+    action(finalDir, finalSay, p.pulse);
+    $('st-think').textContent = ms;
+    $('io-prompt').textContent += `\nSTATE enviado ao modelo: ${res.state}`;
+    $('io-raw').textContent = Object.entries(res.probabilities).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k.padEnd(4)} ${(v*100).toFixed(1)}%`).join('\n');
+    $('io-decision').innerHTML = `<span class="dir">${finalDir}</span> <span class="say">· ${finalSay}</span>`;
+    $('io-parse').textContent = `✓ escolha tipada (${res.model || S.model})`; $('io-parse').style.color = 'var(--success)';
+    Log.info(`#${p.pulse} → ${finalDir} (${ms}ms, ${finalSay})`);
   }
 
   function onPerception(p) {

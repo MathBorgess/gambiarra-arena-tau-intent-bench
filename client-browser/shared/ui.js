@@ -25,6 +25,11 @@ export function detectPlatform() {
 export function corsInstructions(runner) {
   if (runner === 'lmstudio') return 'Habilite "Enable CORS" nas configurações do servidor do LM Studio (aba Developer).';
   if (runner === 'llamacpp') return 'Reinicie o llama.cpp com: --cors-allowed-origins "*"';
+  if (runner === 'ollaya') {
+    return detectPlatform() === 'windows'
+      ? 'No PowerShell: rode  ollaya stop , depois  $env:OLLAYA_ORIGINS="*"  e  ollaya serve  na MESMA janela.'
+      : 'No terminal: rode  ollaya stop  e depois  OLLAYA_ORIGINS="*" ollaya serve';
+  }
   // ollama
   const platform = detectPlatform();
   if (platform === 'windows') {
@@ -43,6 +48,11 @@ export function corsInstructions(runner) {
 export function corsCommand(runner) {
   if (runner === 'lmstudio') return null;
   if (runner === 'llamacpp') return 'llama-server --cors-allowed-origins "*"';
+  if (runner === 'ollaya') {
+    return detectPlatform() === 'windows'
+      ? 'ollaya stop; $env:OLLAYA_ORIGINS="*"; ollaya serve'
+      : 'ollaya stop; OLLAYA_ORIGINS="*" ollaya serve';
+  }
   return detectPlatform() === 'windows'
     ? '$env:OLLAMA_ORIGINS="*"; ollama serve'
     : 'OLLAMA_ORIGINS="*" ollama serve';
