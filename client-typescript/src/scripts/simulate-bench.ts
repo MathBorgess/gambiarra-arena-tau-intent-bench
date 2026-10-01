@@ -14,10 +14,25 @@
  * Options (or env): --server ws://localhost:3000/ws  --pin  --runners N  --tasks K
  *   --delay-ms 150 (per simulated turn)  --fail-q M (every M-th runner fails Q0, default 4)
  *   --auto-owner  --exit-when-done  --prefix sim-bench
+ *
+ * V0.2 backends mode (docs/BENCH-V0.2-REMOTE-BACKENDS.md): `--backends N` starts N FAKE OLLAMA
+ * HTTP servers (/api/version, /api/show, /api/tags) on 127.0.0.2.. (one loopback address each,
+ * port --backend-port, default 11500) and registers each through POST /bench/backends, as the
+ * /bench-join page would. The remote address of all those requests is 127.0.0.1, so the simulator
+ * sends the dev-only header `x-bench-dev-host: 127.0.0.<n>`, which the server honours ONLY when it
+ * runs with BENCH_DEV=1:
+ *
+ *   BENCH_DEV=1 pnpm dev                                   # or: BENCH_DEV=1 pnpm event
+ *   pnpm simulate:bench -- --backends 5                    # register 5 backends, stay up (orchestrator tests)
+ *   pnpm simulate:bench -- --backends 5 --backends-flaky   # last one unreachable, the one before lacks the model
+ *   pnpm simulate:bench -- --backends 5 --pin <PIN>        # also a fake runner per ready backend,
+ *                                                          #   participant_id = backend_id (as the orchestrator does)
+ *   pnpm simulate:bench -- --backends 5 --auto-owner       # whole flow, exits with a summary
  */
 import WebSocket from 'ws';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
+import nodeHttp from 'node:http';
 
 // ------------------------------------------------------------------ args
 
@@ -36,6 +51,9 @@ const TASKS_CAP = parseInt(arg('tasks', 'TASKS', '0'), 10); // 0 = use k_max fro
 const DELAY_MS = parseInt(arg('delay-ms', 'DELAY_MS', '150'), 10);
 const FAIL_Q_EVERY = parseInt(arg('fail-q', 'FAIL_Q', '4'), 10);
 const PREFIX = arg('prefix', 'PREFIX', 'sim-bench');
+const BACKENDS = parseInt(arg('backends', 'BACKENDS', '0'), 10);
+const BACKEND_PORT = parseInt(arg('backend-port', 'BACKEND_PORT', '11500'), 10);
+const BACKENDS_FLAKY = flag('backends-flaky');
 const AUTO_OWNER = flag('auto-owner');
 const EXIT_WHEN_DONE = flag('exit-when-done') || AUTO_OWNER;
 
@@ -84,6 +102,14 @@ function makeTarGz(files: Record<string, string>): Buffer {
 
 // ------------------------------------------------------------------ the fake runner
 
+const MODELS = [
+  { name: 'qwen2.5-coder:7b', family: 'qwen2', size: '7.6B', quant: 'Q4_K_M' },
+  { name: 'llama3.1:8b', family: 'llama', size: '8.0B', quant: 'Q4_0' },
+  { name: 'deepseek-coder-v2:16b', family: 'deepseek2', size: '15.7B', quant: 'Q4_0' },
+  { name: 'phi4:14b', family: 'phi3', size: '14.7B', quant: 'Q4_K_M' },
+];
+const modelDigest = (name: string) => createHash('sha256').update(`model:${name}`).digest('hex');
+
 type Arm = 'A' | 'B' | 'C';
 const HARNESS: Record<Arm | 'Q', string> = { A: 'tau', B: 'tau_intent', C: 'tau_intent_llm_rescue', Q: 'tau' };
 const PASS_RATE: Record<Arm, number> = { A: 0.55, B: 0.75, C: 0.7 };
@@ -112,10 +138,10 @@ class FakeRunner {
     readonly index: number,
     readonly participantId: string,
     readonly nickname: string,
-    private pin: string
+    private pin: string,
+    modelOverride?: string
   ) {
-    const models = ['qwen2.5-coder:7b', 'llama3.1:8b', 'deepseek-coder-v2:16b', 'phi4:14b'];
-    const model = models[(index - 1) % models.length];
+    const model = modelOverride ?? MODELS[(index - 1) % MODELS.length].name;
     this.joinPayload = {
       type: 'bench_join',
       participant_id: participantId,
@@ -319,12 +345,93 @@ class FakeRunner {
   }
 }
 
+// ------------------------------------------------------------------ V0.2: fake Ollama backends
+
+/** The three Ollama endpoints the arena probes. `installed` = what /api/tags lists (and /api/show knows). */
+function startFakeOllama(host: string, port: number, installed: typeof MODELS): Promise<nodeHttp.Server> {
+  const server = nodeHttp.createServer((req, res): void => {
+    const json = (code: number, body: unknown): void => void res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+    if (req.method === 'GET' && req.url === '/api/version') return json(200, { version: '0.6.5-sim' });
+    if (req.method === 'GET' && req.url === '/api/tags') {
+      return json(200, {
+        models: installed.map((m) => ({
+          name: m.name,
+          model: m.name,
+          digest: modelDigest(m.name), // real Ollama: bare hex, no "sha256:" prefix
+          size: 4_000_000_000,
+          details: { family: m.family, parameter_size: m.size, quantization_level: m.quant, format: 'gguf' },
+        })),
+      });
+    }
+    if (req.method === 'POST' && req.url === '/api/show') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', (): void => {
+        let want = '';
+        try {
+          want = JSON.parse(body).model ?? JSON.parse(body).name ?? '';
+        } catch {
+          /* bad body */
+        }
+        const m = installed.find((x) => x.name === want);
+        if (!m) return json(404, { error: `model '${want}' not found` });
+        json(200, { details: { family: m.family, parameter_size: m.size, quantization_level: m.quant, format: 'gguf' }, modelfile: '# simulated' });
+      });
+      return;
+    }
+    json(404, { error: 'not found' });
+  });
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => resolve(server));
+  });
+}
+
+interface SimBackend {
+  index: number;
+  host: string;
+  model: string;
+  nickname: string;
+  backendId: string;
+  reachable: boolean;
+  problems: Array<{ code: string }>;
+  server: nodeHttp.Server | null;
+}
+
+/** Start N fake Ollamas on 127.0.0.2.. and register each, like /bench-join does. */
+async function startBackends(n: number): Promise<SimBackend[]> {
+  const out: SimBackend[] = [];
+  for (let i = 1; i <= n; i++) {
+    const host = `127.0.0.${i + 1}`;
+    const m = MODELS[(i - 1) % MODELS.length];
+    const unreachable = BACKENDS_FLAKY && n >= 2 && i === n;
+    const lacksModel = BACKENDS_FLAKY && n >= 3 && i === n - 1;
+    const installed = lacksModel ? MODELS.filter((x) => x.name !== m.name).slice(0, 1) : [m];
+    const server = unreachable ? null : await startFakeOllama(host, BACKEND_PORT, installed);
+    const res = await http('POST', '/bench/backends', {
+      nickname: `Sim ${i}`,
+      model: m.name,
+      port: BACKEND_PORT,
+      declared_hardware: i % 2 ? { chip: 'Apple M2 (sim)', ram_gb: 16, accel: 'metal' } : { chip: 'RTX 4070 (sim)', ram_gb: 32, accel: 'cuda' },
+      browser: { user_agent: 'simulate-bench', cores: 8, device_memory_gb: 8 },
+    }, { 'x-bench-dev-host': host });
+    out.push({ index: i, host, model: m.name, nickname: `Sim ${i}`, backendId: res.backend_id, reachable: res.reachable, problems: res.problems, server });
+    const status = res.reachable && res.problems.length === 0 ? 'ready' : `PROBLEMS ${res.problems.map((p: any) => p.code).join(',') || '-'}`;
+    log('backend', `${res.backend_id}  ${m.name}  ${host}:${BACKEND_PORT}  ${status}${res.created ? '' : ' (updated)'}`);
+  }
+  const bad = out.filter((b) => !b.reachable && !b.server);
+  if (!BACKENDS_FLAKY && bad.length) {
+    console.error('\nNo backend was reachable: is the arena running with BENCH_DEV=1? (x-bench-dev-host is ignored otherwise)\n');
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ owner (optional)
 
-async function http(method: string, path: string, body?: unknown): Promise<any> {
+async function http(method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}): Promise<any> {
   const res = await fetch(`${HTTP_BASE}${path}`, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: body ? { 'Content-Type': 'application/json', ...extraHeaders } : extraHeaders,
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -368,24 +475,50 @@ async function playOwner(runners: FakeRunner[]) {
 // ------------------------------------------------------------------ main
 
 async function main() {
+  const backendsMode = BACKENDS > 0;
   if (!PIN) {
-    if (!AUTO_OWNER) throw new Error('Pass --pin <PIN> (or --auto-owner to create a session via HTTP)');
-    const s = await http('POST', '/session', { pinLength: 6 });
-    PIN = s.pin;
-    log('owner', `created session, PIN ${PIN}`);
+    if (AUTO_OWNER) {
+      const s = await http('POST', '/session', { pinLength: 6 });
+      PIN = s.pin;
+      log('owner', `created session, PIN ${PIN}`);
+    } else if (!backendsMode) {
+      throw new Error('Pass --pin <PIN> (or --auto-owner to create a session via HTTP)');
+    }
   }
-  console.log(`\nStarting ${RUNNERS} simulated tau-intent runners -> ${SERVER_URL}\n`);
+
+  // V0.2: fake Ollamas + registration through POST /bench/backends (no runners unless a PIN is known).
+  const backends: SimBackend[] = backendsMode ? await startBackends(BACKENDS) : [];
+  const ready = backends.filter((b) => b.reachable && b.problems.length === 0);
+
   const runners: FakeRunner[] = [];
-  for (let i = 1; i <= RUNNERS; i++) {
-    const r = new FakeRunner(i, `${PREFIX}-${i}`, `Sim ${i}`, PIN);
-    await r.connect();
-    runners.push(r);
-    await sleep(60);
+  if (backendsMode) {
+    if (PIN) {
+      console.log(`\nStarting ${ready.length} simulated runners (participant_id = backend_id) -> ${SERVER_URL}\n`);
+      for (const b of ready) {
+        const r = new FakeRunner(b.index, b.backendId, b.nickname, PIN, b.model);
+        await r.connect();
+        runners.push(r);
+        await sleep(60);
+      }
+      log('sim', `${runners.length} runners joined as their backend_id; assign arms in /bench-control (or use --auto-owner)`);
+    } else {
+      console.log('\nNo --pin: backends registered, no runners started. An orchestrator (or --pin) can now attach runners by backend_id.\n');
+    }
+  } else {
+    console.log(`\nStarting ${RUNNERS} simulated tau-intent runners -> ${SERVER_URL}\n`);
+    for (let i = 1; i <= RUNNERS; i++) {
+      const r = new FakeRunner(i, `${PREFIX}-${i}`, `Sim ${i}`, PIN);
+      await r.connect();
+      runners.push(r);
+      await sleep(60);
+    }
+    log('sim', `${runners.length} runners joined; assign arms in /bench-control (or use --auto-owner)`);
   }
-  log('sim', `${runners.length} runners joined; assign arms in /bench-control (or use --auto-owner)`);
 
   const shutdown = () => {
     runners.forEach((r) => r.close());
+    backends.forEach((b) => b.server?.closeAllConnections());
+    backends.forEach((b) => b.server?.close());
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
@@ -404,10 +537,18 @@ async function main() {
     for (const r of runners) for (const u of r.uploads) console.log(`  upload ${u.cell} -> HTTP ${u.status} sha256=${u.sha256.slice(0, 16)}… bytes=${u.bytes}`);
     const rejected = runners.flatMap((r) => r.rejections);
     if (rejected.length) console.log(`server rejections seen by runners: ${rejected.length}`, rejected.slice(0, 5));
+    if (backendsMode) {
+      const list = await http('GET', '/bench/backends');
+      console.log(`backends: ${list.backends.length} registered, runner status: ${list.backends.map((b: any) => `${b.nickname}=${b.runner.status}`).join(' ')}`);
+      // Privacy check: no export may contain a raw simulated host (127.0.0.N).
+      const exports = await Promise.all(['/export-bench.jsonl', '/export-bench.jsonl?envelope=1', '/export-events.csv', '/export-all.json'].map((p) => fetch(`${HTTP_BASE}${p}`).then((x) => x.text())));
+      const leaks = backends.filter((b) => exports.some((t) => t.includes(`${b.host}`)));
+      console.log(`privacy: raw hosts in exports: ${leaks.length === 0 ? 'none' : leaks.map((b) => b.host).join(', ')}`);
+    }
   }
 
   if (EXIT_WHEN_DONE) shutdown();
-  else console.log('\nRunners idle and waiting for bench_assign. Ctrl+C to stop.\n');
+  else console.log(backendsMode ? '\nFake Ollamas up. Ctrl+C to stop.\n' : '\nRunners idle and waiting for bench_assign. Ctrl+C to stop.\n');
 }
 
 main().catch((err) => {
