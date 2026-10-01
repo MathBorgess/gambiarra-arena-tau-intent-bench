@@ -5,8 +5,10 @@ import Scoreboard from './components/Scoreboard';
 import { AdminPanel } from './components/AdminPanel';
 import WorldArena from './components/WorldArena';
 import { WorldControl } from './components/WorldControl';
+import BenchArena from './components/BenchArena';
+import { BenchControl } from './components/BenchControl';
 
-type View = 'arena' | 'voting' | 'scoreboard' | 'admin' | 'world' | 'control';
+type View = 'arena' | 'voting' | 'scoreboard' | 'admin' | 'world' | 'control' | 'bench' | 'bench-control' | 'bench-challenge';
 
 const PAGE_TITLES: Record<View, string> = {
   arena: 'Arena | Gambiarra',
@@ -15,6 +17,9 @@ const PAGE_TITLES: Record<View, string> = {
   admin: 'Admin | Gambiarra',
   world: 'Mundo | Gambiarra',
   control: 'Controle do Mundo | Gambiarra',
+  bench: 'Bench | Gambiarra',
+  'bench-control': 'Controle do Bench | Gambiarra',
+  'bench-challenge': 'Tool Call Challenge | Gambiarra',
 };
 
 function getViewFromPath(): View {
@@ -24,6 +29,9 @@ function getViewFromPath(): View {
   if (path === '/admin') return 'admin';
   if (path === '/world') return 'world';
   if (path === '/control') return 'control';
+  if (path === '/bench') return 'bench';
+  if (path === '/bench-control') return 'bench-control';
+  if (path === '/bench-challenge') return 'bench-challenge';
   return 'arena';
 }
 
@@ -46,6 +54,12 @@ function App() {
         return <WorldArena />;
       case 'control':
         return <WorldControl />;
+      case 'bench':
+        return <BenchArena />;
+      case 'bench-challenge':
+        return <BenchArena view="challenge" />;
+      case 'bench-control':
+        return <BenchControl />;
       default:
         return <Arena />;
     }
