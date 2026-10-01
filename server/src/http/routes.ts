@@ -15,6 +15,8 @@ import { BenchError, CELL_ID_RE, type BenchEngine } from '../core/bench.js';
 import type { BenchStore } from '../core/bench-store.js';
 import { BundleError, MAX_BUNDLE_BYTES, storeBundle } from '../core/bench-artifacts.js';
 import { BenchArmSchema, BenchModeSchema } from '../ws/schemas.js';
+import { BackendError, backendExportRow, backendView, type BackendRegistry, type RunnerView, type StoredBackend } from '../core/bench-backends.js';
+import { isLoopbackRequest, lanJoinUrls, resolveClientHost } from './client-host.js';
 
 const CreateSessionSchema = z.object({
   pinLength: z.number().optional().default(6),
@@ -82,6 +84,32 @@ const BenchStopBodySchema = z.object({
   participant_id: z.string().min(1).optional(),
 });
 
+// ---- Bench V0.2 backends (docs/BENCH-V0.2-REMOTE-BACKENDS.md §2) ----
+const noControl = /^[^\u0000-\u001f\u007f]*$/;
+const optStr = (max: number) => z.string().trim().max(max).regex(noControl).nullish();
+const BackendRegisterBodySchema = z.object({
+  nickname: z.string().trim().min(1).max(40).regex(noControl),
+  model: z.string().trim().min(1).max(120).regex(/^[A-Za-z0-9][A-Za-z0-9._\-:/@+]*$/, 'invalid model name'),
+  port: z.number().int().min(1).max(65535).default(11434),
+  declared_hardware: z
+    .object({
+      chip: optStr(80),
+      ram_gb: z.number().min(0.5).max(4096).nullish(),
+      accel: z.enum(['cuda', 'metal', 'cpu', 'other']).nullish(),
+    })
+    .nullish(),
+  browser: z
+    .object({
+      user_agent: optStr(300),
+      cores: z.number().int().min(1).max(1024).nullish(),
+      device_memory_gb: z.number().min(0.1).max(1024).nullish(),
+    })
+    .nullish(),
+});
+const BackendToggleBodySchema = z.object({ enabled: z.boolean() });
+// Abuse guard for the participant-facing writes: each call fans out to 3 outbound probes.
+const BACKEND_WRITE_RATE = { rateLimit: { max: 30, timeWindow: '1 minute' } };
+
 /** What a runner may POST as the cell bundle (contract: application/gzip). */
 const BUNDLE_CONTENT_TYPES = ['application/gzip', 'application/x-gzip', 'application/octet-stream'];
 
@@ -99,7 +127,7 @@ export async function setupRoutes(
   metricsManager: MetricsManager,
   worldEngine: WorldEngine,
   eventLogger?: EventLogger,
-  bench?: { engine: BenchEngine; store: BenchStore; dataDir: string }
+  bench?: { engine: BenchEngine; store: BenchStore; dataDir: string; backends?: BackendRegistry }
 ) {
   // Health check
   app.get('/health', async () => {
@@ -208,6 +236,99 @@ export async function setupRoutes(
 
     // Full state (telão/control hydration and polling fallback)
     app.get('/bench/state', async () => engine.state(await activeSessionId()));
+
+    // ---- V0.2: model backends (a participant's Ollama, probed over the LAN) ----
+    const backends = bench.backends;
+    if (backends) {
+      /** Runner status per backend: a WS runner registered with participant_id === backend_id. */
+      const runnerViews = async (): Promise<(id: string) => RunnerView> => {
+        const state = (await engine.state(await activeSessionId())) as { participants: Array<{ participant_id: string; cell: { cell_id: string; status: string; records: number } | null }> };
+        const byId = new Map(state.participants.map((p) => [p.participant_id, p]));
+        return (id) => {
+          const connected = hub.isParticipantConnected(id);
+          const cell = byId.get(id)?.cell ?? null;
+          const active = !!cell && ['sent', 'running', 'stopping'].includes(cell.status);
+          return {
+            connected,
+            status: !connected ? 'waiting' : active ? 'running' : 'connected',
+            cell_id: cell?.cell_id ?? null,
+            cell_status: cell?.status ?? null,
+            records: cell?.records ?? 0,
+          };
+        };
+      };
+      const viewOf = async (b: StoredBackend, request: Parameters<typeof isLoopbackRequest>[0]) =>
+        backendView(b, { rawHost: isLoopbackRequest(request), runner: (await runnerViews())(b.id) });
+
+      // Register (or update) the caller's Ollama. The HOST is the request's remote address, never the body.
+      app.post('/bench/backends', { config: BACKEND_WRITE_RATE }, async (request, reply) => {
+        const parsed = BackendRegisterBodySchema.safeParse(request.body ?? {});
+        if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', issues: parsed.error.issues });
+        const b = parsed.data;
+        try {
+          const { backend, created } = await backends.register(
+            {
+              nickname: b.nickname,
+              model: b.model,
+              port: b.port,
+              declaredHardware: b.declared_hardware
+                ? { chip: b.declared_hardware.chip ?? null, ram_gb: b.declared_hardware.ram_gb ?? null, accel: b.declared_hardware.accel ?? null }
+                : null,
+              browser: b.browser
+                ? { user_agent: b.browser.user_agent ?? null, cores: b.browser.cores ?? null, device_memory_gb: b.browser.device_memory_gb ?? null }
+                : null,
+            },
+            resolveClientHost(request)
+          );
+          return reply.code(created ? 201 : 200).send({ created, ...(await viewOf(backend, request)) });
+        } catch (err) {
+          if (err instanceof BackendError) return reply.code(err.httpStatus).send({ error: err.code, message: err.message });
+          throw err;
+        }
+      });
+
+      // Every backend. `provider_url` (raw host) only for loopback callers; others get `host_sha256` only.
+      app.get('/bench/backends', async (request) => {
+        const raw = isLoopbackRequest(request);
+        const runnerOf = await runnerViews();
+        const list = await backends.list();
+        return {
+          t: Date.now(),
+          raw_host_visible: raw,
+          join_urls: lanJoinUrls(parseInt(process.env.PORT || '3000', 10)),
+          backends: list.map((x) => backendView(x, { rawHost: raw, runner: runnerOf(x.id) })),
+        };
+      });
+
+      app.get('/bench/backends/:id', async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const b = await backends.get(id);
+        if (!b) return reply.code(404).send({ error: 'unknown_backend' });
+        return viewOf(b, request);
+      });
+
+      app.post('/bench/backends/:id/probe', { config: BACKEND_WRITE_RATE }, async (request, reply) => {
+        const { id } = request.params as { id: string };
+        try {
+          return await viewOf(await backends.reprobe(id), request);
+        } catch (err) {
+          if (err instanceof BackendError) return reply.code(err.httpStatus).send({ error: err.code, message: err.message });
+          throw err;
+        }
+      });
+
+      app.post('/bench/backends/:id', { config: BACKEND_WRITE_RATE }, async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const parsed = BackendToggleBodySchema.safeParse(request.body ?? {});
+        if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', issues: parsed.error.issues });
+        try {
+          return await viewOf(await backends.setEnabled(id, parsed.data.enabled), request);
+        } catch (err) {
+          if (err instanceof BackendError) return reply.code(err.httpStatus).send({ error: err.code, message: err.message });
+          throw err;
+        }
+      });
+    }
 
     // ---- artifacts: the cell bundle (gzip tar) ----
     // The body is streamed to disk, never buffered: register a parser that hands the raw stream over.
@@ -780,7 +901,9 @@ export async function setupRoutes(
     reply.header('Content-Type', 'application/json');
     reply.header('Content-Disposition', `attachment; filename="session-${session.id}-full.json"`);
 
-    return session;
+    // V0.2 backends: hashed host only (backendExportRow has no host field).
+    const benchBackends = bench?.backends ? (await bench.backends.list()).map(backendExportRow) : undefined;
+    return benchBackends ? { ...session, benchBackends } : session;
   });
 }
 

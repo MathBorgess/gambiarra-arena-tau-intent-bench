@@ -12,6 +12,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+        // This port is open to the whole LAN, so everything through it arrives as loopback.
+        // Mark it so the server never hands raw participant hosts (provider_url) to it.
+        headers: { 'x-bench-via-telao': '1' },
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
       '/ws': {

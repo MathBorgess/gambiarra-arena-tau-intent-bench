@@ -11,6 +11,7 @@ import { EventLogger } from './core/eventlog.js';
 import { WorldEngine } from './core/world.js';
 import { BenchEngine } from './core/bench.js';
 import { PrismaBenchStore } from './core/bench-store.js';
+import { BackendRegistry, PrismaBackendStore, backendEventMeta, backendExportRow } from './core/bench-backends.js';
 import { setupRoutes } from './http/routes.js';
 import path from 'path';
 import fs from 'fs';
@@ -137,6 +138,23 @@ hub.setWorldEngine(worldEngine);
 const benchStore = new PrismaBenchStore(prisma);
 const benchEngine = new BenchEngine(hub, app.log, benchStore, eventLogger);
 hub.setBenchEngine(benchEngine);
+// V0.2: participants' Ollamas as model backends. Events carry host_sha256 only (backendEventMeta).
+const benchBackends = new BackendRegistry(new PrismaBackendStore(prisma), {
+  log: (type, backend, extra) => {
+    void (async () => {
+      const session = await prisma.session.findFirst({ where: { status: 'active' }, orderBy: { createdAt: 'desc' } }).catch(() => null);
+      await eventLogger.log({
+        sessionId: session?.id,
+        eventType: type,
+        actorType: type === 'bench_backend_toggled' ? 'admin' : 'participant',
+        actorId: backend.id,
+        targetType: 'bench',
+        targetId: backend.id,
+        metadata: backendEventMeta(backend, extra),
+      });
+    })();
+  },
+});
 const benchDataDir = process.env.BENCH_DATA_DIR || path.join(import.meta.dirname ?? '.', '..', 'data', 'bench');
 
 // SQLite tuning for bursts of concurrent connects/disconnects (e.g. 25+ people
@@ -226,6 +244,8 @@ function serveBrowserClient(file: string) {
 }
 app.get('/agent', { config: { rateLimit: false } }, serveBrowserClient('agent.html'));
 app.get('/client', { config: { rateLimit: false } }, serveBrowserClient('client.html'));
+//   /bench-join -> bench-join.html (bench V0.2: register your Ollama as a model backend)
+app.get('/bench-join', { config: { rateLimit: false } }, serveBrowserClient('bench-join.html'));
 
 // Shared modules/styles used by both browser clients (client-browser/shared/).
 const ASSET_TYPES: Record<string, string> = {
@@ -260,6 +280,7 @@ await setupRoutes(app, hub, roundManager, voteManager, metricsManager, worldEngi
   engine: benchEngine,
   store: benchStore,
   dataDir: benchDataDir,
+  backends: benchBackends,
 });
 
 // ---- Automatic data snapshots ----
@@ -283,7 +304,8 @@ async function dumpSnapshot(reason: string) {
     fs.mkdirSync(snapshotsDir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const file = path.join(snapshotsDir, `session-${session.id}-${ts}.json`);
-    fs.writeFileSync(file, JSON.stringify({ reason, exportedAt: new Date().toISOString(), session }, null, 2));
+    const backends = (await benchBackends.list()).map(backendExportRow); // hashed host only
+    fs.writeFileSync(file, JSON.stringify({ reason, exportedAt: new Date().toISOString(), session, benchBackends: backends }, null, 2));
     app.log.info({ file, reason, events: session.events.length }, 'SNAPSHOT: session data written to disk');
   } catch (err) {
     app.log.error({ err }, 'SNAPSHOT_FAILED');

@@ -202,3 +202,31 @@ model BenchArtifact {
   @@index([sessionId])
   @@map("bench_artifacts")
 }
+
+// V0.2: a participant's Ollama, reached over the LAN from the arena owner's machine
+// (docs/BENCH-V0.2-REMOTE-BACKENDS.md §2). `host` is the raw LAN address taken from the
+// registering request and is NEVER exported: exports, snapshots and event-log metadata carry
+// `hostSha256`. Not tied to a session: one DB per event.
+model BenchBackend {
+  id               String    @id // backend_id: b-<slug>-<hex6>; also the runner's participant_id
+  host             String
+  port             Int
+  model            String
+  nickname         String
+  declaredHardware String?   // JSON {chip, ram_gb, accel}
+  browser          String?   // JSON {user_agent, cores, device_memory_gb}
+  enabled          Boolean   @default(true)
+  reachable        Boolean   @default(false)
+  ollamaVersion    String?
+  digest           String?
+  details          String?   // JSON {family, parameter_size, quantization_level}
+  problems         String    @default("[]") // JSON [{code, fix, detail?}]
+  lastProbeAt      DateTime?
+  hostSha256       String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  @@unique([host, port, model])
+  @@index([hostSha256])
+  @@map("bench_backends")
+}

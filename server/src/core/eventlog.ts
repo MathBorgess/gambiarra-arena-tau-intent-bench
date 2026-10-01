@@ -33,7 +33,11 @@ export type EventType =
   | 'bench_stopped'
   | 'bench_artifacts_uploaded'
   | 'bench_snapshot'
-  | 'bench_error';
+  | 'bench_error'
+  // Bench V0.2 model backends (hashed host only — never the raw LAN address)
+  | 'bench_backend_registered'
+  | 'bench_backend_probed'
+  | 'bench_backend_toggled';
 
 export type ActorType = 'admin' | 'participant' | 'voter' | 'system';
 export type TargetType = 'session' | 'round' | 'participant' | 'vote' | 'metrics' | 'world' | 'bench';
