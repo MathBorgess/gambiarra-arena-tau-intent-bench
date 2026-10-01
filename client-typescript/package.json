@@ -10,7 +10,8 @@
     "build": "tsc",
     "start": "node dist/cli.js",
     "test": "vitest",
-    "simulate": "tsx src/scripts/simulate.ts"
+    "simulate": "tsx src/scripts/simulate.ts",
+    "simulate:bench": "tsx src/scripts/simulate-bench.ts"
   },
   "dependencies": {
     "ws": "^8.18.0",
