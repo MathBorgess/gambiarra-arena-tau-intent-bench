@@ -1,8 +1,8 @@
 # Modo Bench — tau-intent contra LLMs locais (A/B/C)
 
 > **O que é:** um modo da arena em que, em vez de pedir uma resposta de texto,
-> cada máquina roda um **agente de código autônomo** (o `tau`, via runner
-> Python `tau-intent bench`) contra o LLM local do participante, numa cadeia de
+> um **agente de código autônomo** (o `tau`, via runner Python
+> `tau-intent bench`) trabalha contra o LLM local do participante, numa cadeia de
 > tarefas de um mini-repositório Python. O dono escolhe, **no painel de
 > controle, quais braços (A/B/C) cada participante roda**, acompanha o
 > progresso ao vivo no telão e termina com todos os registros e os bundles de
@@ -14,9 +14,63 @@
 > esta página é a **§1 (contrato do modo, Etapa 1 da receita)** e o **§2
 > (runbook do dono)**.
 >
+> **V0.2 (2026-10-01): participantes são *backends de modelo*.** O participante
+> só baixa o modelo e liga o Ollama; **o runner (`tau-intent bench`), o agente, os
+> workspaces e o oráculo rodam na máquina do dono da arena**, um processo por
+> participante, que chama o Ollama dele pela rede local. O protocolo WebSocket
+> runner↔arena (§1) **não mudou**: o runner se registra com
+> `participant_id = backend_id`. Contrato: [`docs/BENCH-V0.2-REMOTE-BACKENDS.md`](../BENCH-V0.2-REMOTE-BACKENDS.md).
+> O §0 abaixo (participante) e o §2 (runbook) já refletem isso; as menções a
+> "cada máquina roda o runner" no resto do texto valem para a V0 (runner local).
+>
 > **V0 é instrumentação, não coleta medida.** Tudo que sai daqui carrega
 > `"draft": true` e **não é resultado do TG** até o congelamento G2. O servidor
 > **guarda o que recebe** (JSON cru) e **nunca recalcula desfechos**.
+
+---
+
+## 0. O que o participante faz (V0.2: as duas linhas)
+
+```bash
+ollama pull <modelo>
+OLLAMA_HOST=0.0.0.0:11434 OLLAMA_ORIGINS='*' ollama serve
+```
+
+Depois abre `http://<ip-da-arena>:3000/bench-join` (o painel mostra o endereço e um
+QR code), escolhe o modelo, digita um apelido e, se quiser, declara chip / RAM / GPU.
+A página diz se a arena alcançou o Ollama; se não, mostra o conserto exato
+(`OLLAMA_HOST`, firewall) por sistema (macOS / Linux / Windows). Deixe o notebook
+**ligado e na tomada**. Nada mais, e nada nosso roda na máquina do participante.
+
+> Aviso de consentimento: `OLLAMA_HOST=0.0.0.0` expõe a API do Ollama, **sem
+> autenticação**, à rede local durante o evento. Encerre o `ollama serve` depois.
+
+### 0.1 Backends (HTTP)
+
+| Método | Caminho | Quem | Para quê |
+|---|---|---|---|
+| GET | `/bench-join` | participante | página estática (como `/agent`), isenta de rate limit |
+| POST | `/bench/backends` `{nickname, model, port?, declared_hardware?, browser?}` | participante | registra/atualiza o Ollama de **quem chama**. O host é o endereço remoto da requisição, nunca o corpo. Testa `/api/version`, `POST /api/show`, `/api/tags` (3 s cada, sem proxy) |
+| GET | `/bench/backends[/:id]` | dono / orquestrador / página | lista; `provider_url` só para requisições de loopback |
+| POST | `/bench/backends/:id/probe` | participante, dono | testa de novo (corpo vazio, ou `{}` com `Content-Type: application/json`) |
+| POST | `/bench/backends/:id` `{enabled}` | dono | liga/desliga: o orquestrador não sobe runner para backend desligado |
+
+- Chave do backend: `(host, port, modelo)`; reenviar da mesma máquina **atualiza** o
+  registro (mesmo `backend_id`, `b-<apelido>-<hex6>`). `llama3` e `llama3:latest` são o mesmo modelo.
+- `problems[].code`: `unreachable` (conexão recusada: Ollama preso ao localhost),
+  `timeout` (firewall / outra rede), `model_missing`; cada um traz `fix` (texto para o participante).
+- Rate limit: 30 escritas/min por IP não-local nas rotas POST (cada uma dispara 3 sondagens); máx. 16 backends por máquina.
+- **Privacidade:** o IP fica só na tabela `bench_backends` (precisa do `provider_url`).
+  Exportações (`/export-bench.jsonl`, `/export-events.csv`, `/export-all.json`),
+  snapshots e metadados do event log (`bench_backend_registered|probed|toggled`)
+  levam **`host_sha256`** (sha256 hex do host, sem porta, IPv4-mapeado normalizado).
+  Atenção: IPv4 de LAN tem pouca entropia, então o hash **pseudonimiza, não
+  anonimiza**. E uma **cópia do banco** (`server/prisma/*.db`) contém `bench_backends.host`:
+  apague/zere essa coluna antes de compartilhar a cópia.
+- Só chamadas de **loopback** (a máquina do dono, o orquestrador) recebem
+  `provider_url`; qualquer outra, inclusive via o servidor de dev do telão (`:5173`,
+  marcado com `x-bench-via-telao`), recebe `provider_url: null`.
+- `x-bench-dev-host`: só vale com `BENCH_DEV=1` (simulador). Fora disso é ignorado.
 
 ---
 
@@ -129,41 +183,67 @@ qualificação, o placar do "Tool Call Challenge".
 > rodam na **máquina do dono**, na raiz do repositório. **Nunca** teste em cima
 > do banco de um encontro: para ensaios use `DATABASE_URL="file:/tmp/teste.db"`.
 
-### 2.0 Antes de tudo
+### 2.0 Antes de tudo (V0.2)
 
-- Cada participante precisa do **modelo local rodando** (Ollama / LM Studio /
-  llama.cpp com endpoint `/v1`), do `tau-intent` (Python 3.12) e **da mesma
-  pasta `taskset/`** (o `task_set_sha` de cada runner aparece no painel; se
-  houver mais de um valor, o painel avisa em amarelo e os registros dessas
-  máquinas não são comparáveis).
-- Rede: um AP bom; a arena já documenta o colapso perto de 20–30 clientes
-  ([LIMITS.md](../../LIMITS.md)). Cada runner usa **1 conexão WebSocket** e faz
-  uploads HTTP curtos no fim.
+- **O que roda onde.** Participante: só `ollama pull` + `ollama serve` aberto à rede (§0).
+  Máquina do dono: a arena, o orquestrador e **todos os runners** (um `tau-intent bench`
+  por backend). O agente, o `bash` do agente e os workspaces ficam na máquina do dono:
+  rode o orquestrador num **usuário descartável, VM ou container** (decisão do dono; a V0.2
+  ainda não containeriza).
+- **Mesmo `taskset/` para todos**: agora é o do `mathai-harness`, então o `task_set_sha`
+  é igual por construção; o painel ainda avisa em amarelo se aparecer mais de um valor.
+- Rede: um AP bom (sem isolamento de clientes; senão o Ollama do participante fica
+  inalcançável) e a arena documenta o colapso perto de 20–30 clientes ([LIMITS.md](../../LIMITS.md)).
+  Cada runner usa **1 conexão WebSocket** (do 127.0.0.1) e a carga de LLM vai pela LAN.
+- Hardware **declarado** pelo participante (+ fatos do Ollama: versão, família, tamanho, quantização, digest);
+  a arena não consegue ler o hardware da máquina dele.
 
 ### 2.1 Subir
 
+Pelo `mathai-harness` (o repositório do orquestrador, que fixa as versões do tau-intent e desta arena):
+
 ```bash
-pnpm event          # backup do banco, db push, build, servidor :3000 + telão :5173
+python -m mathai_harness.orchestrator doctor   # versões, portas, python/node/pnpm
+python -m mathai_harness.orchestrator setup    # venv do tau-intent, pnpm install + build da arena
+python -m mathai_harness.orchestrator up       # sobe ESTA arena (banco em data/<sessão>/), cria a sessão,
+                                               # imprime URL de entrada + PIN e supervisiona os runners
 ```
 
-O banner mostra as URLs. As novas tabelas (`bench_*`) são criadas pelo
+`up` consulta `GET /bench/backends` a cada poucos segundos e sobe um runner por backend
+**ligado, alcançável e sem runner vivo** (`participant_id = backend_id`). Quem decide braços, roda a
+qualificação e inicia/para o bench continua sendo **você, no painel** (§2.3–2.5).
+
+Só a arena, sem orquestrador (ensaio com o simulador, ou para depurar):
+
+```bash
+BENCH_DEV=1 pnpm event   # BENCH_DEV=1 só para o simulador (§2.8); omita no evento real
+```
+
+O banner mostra as URLs. As tabelas `bench_*` (inclusive `bench_backends`) são criadas pelo
 `db push`. Abra:
 
 | O quê | URL |
 |---|---|
-| Painel do dono | `http://localhost:5173/bench-control` |
+| Painel do dono | `http://localhost:5173/bench-control` (tabela **Backends** acima dos runners, URL de entrada e QR code) |
+| Entrada dos participantes | `http://<ip-da-arena>:3000/bench-join` |
 | Telão (projetor) | `http://localhost:5173/bench` (escolhe sozinho: qualificação → Tool Call Challenge, bench → grade) |
 | Forçar uma visão | `/bench?view=challenge` · `/bench?view=grid` · `/bench-challenge` |
 
-### 2.2 Sessão e runners entram
+### 2.2 Sessão, backends e runners
 
-1. No painel, **Criar sessão** (anote o PIN).
-2. Em cada máquina, o participante roda o comando que o painel mostra
-   (`tau-intent bench --server ws://<ip-do-dono>:3000/ws --pin <PIN> --participant-id … --model …`).
-3. Cada runner aparece na tabela com **modelo (digest), hardware, hashes
-   (`task_set_sha`, `tau_intent_sha`) e versão do runner**. Todo runner entra
-   com um plano padrão: os três braços, ordem sorteada pela semente da célula.
-4. Sem Python à mão? Ensaie tudo com o simulador (§2.8).
+1. No painel, a sessão (PIN) já existe se você usou `up`; senão, **Criar sessão**.
+2. Mostre o QR / URL de entrada. Cada participante registra o modelo; na tabela **Backends** aparecem
+   apelido, modelo (família · tamanho · quantização), digest, versão do Ollama, alcançável ou o
+   problema (`unreachable` / `timeout` / `model_missing`), última checagem e o estado do runner
+   (aguardando / conectado / rodando célula). **↻ testar** refaz a sondagem; o interruptor
+   **Ligado** exclui um backend (o orquestrador não sobe, nem reinicia, runner para ele).
+3. Quando o orquestrador sobe o runner, a linha aparece também na tabela **Runners**
+   (modelo, hardware declarado, hashes, braços). Todo runner entra com o plano padrão:
+   os três braços, ordem sorteada pela semente da célula.
+4. Backend perdido no meio da célula: o runner manda um `bench_error` e fecha a célula
+   truncada (`bench_cell_done` com `truncated:true` + bundle); o painel marca "⚠ backend perdido".
+   O erro nunca é repetido em silêncio no meio de uma tarefa (repetir mudaria o tratamento).
+5. Sem Python nem Ollama à mão? Ensaie tudo com o simulador (§2.8).
 
 ### 2.3 Atribuir braços (a decisão é sua)
 
@@ -277,13 +357,28 @@ tarefas por célula), `--delay-ms` (duração de cada turno simulado), `--fail-q
 Os runners falsos falam exatamente o protocolo do §1, gravam um `tar.gz` pequeno
 e o enviam por `POST /bench/artifacts/:cellId` com `x-bench-sha256`.
 
+**Modo backends (V0.2)**, para testar o painel e o orquestrador sem Ollama de verdade.
+O servidor precisa de `BENCH_DEV=1` (o endereço remoto de todas as requisições é 127.0.0.1;
+o simulador informa o "IP" de cada Ollama falso no cabeçalho `x-bench-dev-host`, só honrado nesse modo):
+
+```bash
+BENCH_DEV=1 pnpm event                                      # (ou pnpm dev)
+pnpm simulate:bench -- --backends 5                          # 5 Ollamas falsos em 127.0.0.2.. (porta 11500), registrados via POST /bench/backends
+pnpm simulate:bench -- --backends 5 --backends-flaky        # o último inalcançável, o penúltimo sem o modelo
+pnpm simulate:bench -- --backends 5 --pin <PIN>             # + um runner falso por backend pronto (participant_id = backend_id)
+pnpm simulate:bench -- --backends 5 --auto-owner            # fluxo completo + checagem: nenhum IP cru nas exportações
+```
+
+`--backend-port` muda a porta. Sem `--pin`/`--auto-owner` o simulador só registra e fica de pé
+(para o orquestrador subir os runners dele).
+
 ### 2.9 Limites e dicas
 
 | Item | Limite / comportamento |
 |---|---|
 | Mensagem WebSocket | **1 MiB** (`WS_MAX_PAYLOAD`): um `bench_record` com `per_test` enorme pode estourar; o servidor responde `error` e o runner mantém o JSONL local |
 | Bundle | **200 MB**, `application/gzip` (também `application/x-gzip`/`octet-stream`), começa com os bytes gzip `1f 8b`; recebido em *stream* (não ocupa memória) |
-| Rate limit HTTP | 500 req/min por IP **não-local**; `/bench/artifacts/:cellId` é isento (uploads/retries). `/bench-control` e o telão chegam como `127.0.0.1` (isento) |
+| Rate limit HTTP | 500 req/min por IP **não-local**; `/bench/artifacts/:cellId` e `/bench-join` são isentos (uploads/retries; página estática). `POST /bench/backends*` tem limite próprio de 30/min por IP não-local. `/bench-control` e o telão chegam como `127.0.0.1` (isento) |
 | Ping/pong | o hub derruba conexão sem resposta a ~90 s: o runner **não pode bloquear o event loop** do cliente WebSocket (rode pytest/git em subprocesso/thread) |
 | Reconexão do runner | refazer `register` + `bench_join`; a célula em curso continua válida (o servidor reconhece pelo `cell_id`) e **não reenvia** `bench_assign` |
 | Restart do servidor | células e registros voltam do banco (`running` volta se havia célula viva); o telão mostra "reconectando" e se recupera sozinho |
@@ -321,3 +416,20 @@ alterado.
   (exigência da receita) e `bench_error`.
 - O status "passou Q0" (`evaluateQualification` em `bench.ts`) é uma visão derivada para o dono e o telão; **não** é
   coluna nem evento.
+
+## 4. Decisões da V0.2 (backends remotos)
+
+- Aditivo ao §3: o protocolo WS não mudou. `bench_join.hardware` ganhou `source` (`declared|local`) e
+  `declared {chip, ram_gb, accel}`; `chip`, `ram_gb` e `accel` podem ser `null` (join e registro). O painel
+  mostra `hardware.declared` quando `source === "declared"`.
+- Campos novos do registro que a arena só guarda (JSON cru): `backend {backend_id, transport, provider_host_sha256, ollama_version}`,
+  `model.details`, `error {kind, detail}`, `turns[].latency_ms|ttft_ms`.
+- O host do backend vem do endereço TCP do cliente. O `X-Forwarded-For` (Fastify `trustProxy: true`) só
+  vale quando o par TCP é loopback (proxy local); de um cliente da LAN ele é ignorado, para ninguém
+  mandar a arena sondar outra máquina nem se passar por loopback.
+- `bench_error.message` passa por `redactHosts` (IPv4 e hosts de URL não-loopback viram `[host]`) antes
+  de ir ao event log e ao painel. O `error.detail` dos **registros** é guardado como recebido: o runner
+  não deve colocar o endereço nele.
+- Eventos novos no event log: `bench_backend_registered`, `bench_backend_probed`, `bench_backend_toggled`
+  (só `host_sha256`).
+

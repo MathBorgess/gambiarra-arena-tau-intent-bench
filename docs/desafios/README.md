@@ -74,7 +74,7 @@ limites em [BENCH.md](BENCH.md); contrato compartilhado entre as equipes em
 [`docs/BENCH-V0-CONTRACT.md`](../BENCH-V0-CONTRACT.md). Peças novas:
 `server/src/core/bench.ts` (engine), `bench-store.ts` (persistência),
 `bench-artifacts.ts` (upload em stream), `telao/src/components/BenchArena.tsx`,
-`BenchControl.tsx`, `ToolCallChallenge.tsx` e o simulador
+`BenchControl.tsx`, `ToolCallChallenge.tsx`, `bench-backends.ts` (V0.2: Ollamas dos participantes como *backends*), `client-browser/bench-join.html` e o simulador
 `client-typescript/src/scripts/simulate-bench.ts`.
 
 ---
