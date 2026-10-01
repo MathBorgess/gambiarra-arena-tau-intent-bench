@@ -10,6 +10,11 @@ import {
   type WorldJoinMessage,
   type AgentActionMessage,
   type AgentPromptMessage,
+  type BenchJoinMessage,
+  type BenchProgressMessage,
+  type BenchRecordMessage,
+  type BenchCellDoneMessage,
+  type BenchErrorMessage,
   ExtendedClientMessageSchema,
   type ExtendedClientMessage,
 } from './schemas.js';
@@ -23,6 +28,20 @@ export interface WorldEngineLike {
   handleJoin(participantId: string, msg: WorldJoinMessage, info: { nickname: string; sessionId?: string }): void;
   handleAction(participantId: string, msg: AgentActionMessage): void;
   removeAgent(participantId: string): void;
+}
+
+/**
+ * Minimal surface of the BenchEngine that the hub routes bench_* messages to.
+ * Declared structurally to avoid a circular import with core/bench.ts.
+ */
+export interface BenchEngineLike {
+  handleJoin(participantId: string, msg: BenchJoinMessage, info: { nickname: string; sessionId: string }): Promise<void>;
+  handleProgress(participantId: string, msg: BenchProgressMessage): void;
+  handleRecord(participantId: string, msg: BenchRecordMessage, rawRecord: unknown): Promise<{ ok: boolean; code?: string; message?: string }>;
+  handleCellDone(participantId: string, msg: BenchCellDoneMessage): Promise<{ ok: boolean; code?: string; message?: string }>;
+  handleError(participantId: string, msg: BenchErrorMessage): void;
+  handleDisconnect(participantId: string): void;
+  snapshot(): object;
 }
 
 interface ParticipantConnection {
@@ -47,6 +66,7 @@ export class WebSocketHub {
   private firstTokenTime = new Map<string, Map<number, Date>>(); // participantId -> round -> first token timestamp
   private generationStartTime = new Map<string, Map<number, Date>>(); // participantId -> round -> start timestamp
   private worldEngine?: WorldEngineLike;
+  private benchEngine?: BenchEngineLike;
 
   constructor(
     private prisma: PrismaClient,
@@ -60,6 +80,11 @@ export class WebSocketHub {
   /** Wire up the world engine (set after construction to break the import cycle). */
   setWorldEngine(engine: WorldEngineLike) {
     this.worldEngine = engine;
+  }
+
+  /** Wire up the bench engine (set after construction to break the import cycle). */
+  setBenchEngine(engine: BenchEngineLike) {
+    this.benchEngine = engine;
   }
 
   async handleConnection(ws: WebSocket, sessionId?: string) {
@@ -82,10 +107,11 @@ export class WebSocketHub {
         // Accept both participant messages and telao registrations
         const message = ExtendedClientMessageSchema.parse(raw) as ExtendedClientMessage;
 
-        await this.handleMessage(connId, ws, message);
+        // bench_record is stored AS RECEIVED: hand over the untouched wire object, not zod's copy.
+        await this.handleMessage(connId, ws, message, raw);
       } catch (error) {
         this.logger.error({ error, connId }, 'Failed to parse message');
-        ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
+        ws.send(JSON.stringify(this.invalidMessageReply(data, error)));
       }
     });
 
@@ -98,7 +124,28 @@ export class WebSocketHub {
     });
   }
 
-  private async handleMessage(connId: string, ws: WebSocket, message: ExtendedClientMessage) {
+  /**
+   * `{type:'error', message:'Invalid message format'}` as always; for bench_* messages the
+   * runner also gets the first schema issues, so a rejected record is debuggable from its side.
+   */
+  private invalidMessageReply(data: unknown, error: unknown): Record<string, unknown> {
+    const reply: Record<string, unknown> = { type: 'error', message: 'Invalid message format' };
+    try {
+      const raw = JSON.parse(String(data));
+      if (typeof raw?.type === 'string' && raw.type.startsWith('bench_') && (error as { issues?: unknown[] })?.issues) {
+        const issues = (error as { issues: Array<{ path: Array<string | number>; message: string }> }).issues;
+        reply.code = 'bench_invalid_message';
+        reply.ref = raw.type;
+        if (typeof raw.cell_id === 'string') reply.cell_id = raw.cell_id;
+        reply.issues = issues.slice(0, 8).map((i) => `${i.path.join('.')}: ${i.message}`);
+      }
+    } catch {
+      /* not JSON: keep the generic reply */
+    }
+    return reply;
+  }
+
+  private async handleMessage(connId: string, ws: WebSocket, message: ExtendedClientMessage, rawMessage?: any) {
   // message may be ExtendedClientMessage at runtime; narrow by type
   switch (message.type) {
       case 'register':
@@ -122,10 +169,76 @@ export class WebSocketHub {
       case 'agent_prompt':
         this.handleAgentPrompt(connId, message);
         break;
+      case 'bench_join':
+        await this.handleBenchJoin(connId, ws, message);
+        break;
+      case 'bench_progress':
+        this.handleBenchProgress(connId, message);
+        break;
+      case 'bench_record':
+        await this.handleBenchRecord(connId, ws, message, rawMessage?.record);
+        break;
+      case 'bench_cell_done':
+        await this.handleBenchCellDone(connId, ws, message);
+        break;
+      case 'bench_error':
+        this.handleBenchError(connId, message);
+        break;
       case 'error':
         this.logger.error({ message }, 'Client error');
         break;
     }
+  }
+
+  // ---- bench mode (tau-intent runner) ----
+
+  private async handleBenchJoin(connId: string, ws: WebSocket, message: BenchJoinMessage) {
+    const conn = this.connections.get(connId);
+    if (!conn) {
+      ws.send(JSON.stringify({ type: 'error', code: 'bench_not_registered', message: 'Register before joining the bench' }));
+      return;
+    }
+    if (message.participant_id !== conn.participantId) {
+      ws.send(
+        JSON.stringify({
+          type: 'error',
+          code: 'bench_participant_mismatch',
+          message: `bench_join.participant_id (${message.participant_id}) differs from the registered participant (${conn.participantId})`,
+        })
+      );
+      return;
+    }
+    await this.benchEngine?.handleJoin(conn.participantId, message, { nickname: conn.nickname, sessionId: conn.sessionId });
+  }
+
+  private handleBenchProgress(connId: string, message: BenchProgressMessage) {
+    const conn = this.connections.get(connId);
+    if (!conn) return;
+    this.benchEngine?.handleProgress(conn.participantId, message);
+  }
+
+  private async handleBenchRecord(connId: string, ws: WebSocket, message: BenchRecordMessage, rawRecord: unknown) {
+    const conn = this.connections.get(connId);
+    if (!conn || !this.benchEngine) return;
+    const res = await this.benchEngine.handleRecord(conn.participantId, message, rawRecord ?? message.record);
+    if (!res.ok) {
+      ws.send(JSON.stringify({ type: 'error', code: 'bench_record_rejected', reason: res.code, cell_id: message.cell_id, message: res.message }));
+    }
+  }
+
+  private async handleBenchCellDone(connId: string, ws: WebSocket, message: BenchCellDoneMessage) {
+    const conn = this.connections.get(connId);
+    if (!conn || !this.benchEngine) return;
+    const res = await this.benchEngine.handleCellDone(conn.participantId, message);
+    if (!res.ok) {
+      ws.send(JSON.stringify({ type: 'error', code: 'bench_cell_done_rejected', reason: res.code, cell_id: message.cell_id, message: res.message }));
+    }
+  }
+
+  private handleBenchError(connId: string, message: BenchErrorMessage) {
+    const conn = this.connections.get(connId);
+    if (!conn) return;
+    this.benchEngine?.handleError(conn.participantId, message);
   }
 
   private handleWorldJoin(connId: string, ws: WebSocket, message: WorldJoinMessage) {
@@ -180,6 +293,15 @@ export class WebSocketHub {
       ws.send(JSON.stringify({ type: 'registered_telao', view: message.view || 'arena' }));
     } catch (error) {
       this.logger.error({ error }, 'Failed to ack telao register');
+    }
+
+    // Bench views hydrate straight from the engine (a telão opened mid-run must not stay blank).
+    if (message.view === 'bench' || message.view === 'bench-control') {
+      try {
+        ws.send(JSON.stringify(this.benchEngine?.snapshot()));
+      } catch (error) {
+        this.logger.error({ error, connId }, 'Failed to send bench state to telao');
+      }
     }
 
     // Push a full state snapshot so the client hydrates immediately without
@@ -583,6 +705,7 @@ export class WebSocketHub {
 
       // Remove from the agent world if present
       this.worldEngine?.removeAgent(conn.participantId);
+      this.benchEngine?.handleDisconnect(conn.participantId);
 
       // Update lastSeen and connected=false in the database so frontends can detect offline participants
       try {
