@@ -50,6 +50,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `src/core/rounds.ts`: Round lifecycle management (create, start, stop)
 - `src/core/votes.ts`: Voting and scoreboard aggregation
 - `src/http/routes.ts`: REST API for session/round control
+- `src/core/bench.ts` (+ `bench-store.ts`, `bench-artifacts.ts`): bench mode engine — arm assignments per participant, progress state, records/bundles storage
 - `prisma/schema.prisma`: Database schema (Session, Participant, Round, Metrics, Vote)
 
 **Client TypeScript (`client-typescript/`):**
@@ -62,6 +63,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `src/components/Arena.tsx`: Main display with participant grid (supports SVG rendering mode)
 - `src/components/Voting.tsx`: Voting interface (accessible via QR code)
 - URL routes: `/voting`, `/scoreboard`, `/admin` (path-based routing)
+- Bench mode (`/bench` projector, `/bench-control` owner panel, `/bench-challenge`): `BenchArena.tsx`, `BenchControl.tsx`, `ToolCallChallenge.tsx` — see `docs/desafios/BENCH.md`
 
 ## Common Development Commands
 

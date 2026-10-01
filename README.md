@@ -50,6 +50,13 @@ Imitar celebridades ou personagens sem revelá-los explicitamente.
 Resolver problemas complexos com soluções criativas e limitações de hardware.
 - **Critérios:** Eficiência com recursos limitados, criatividade na solução, velocidade de resposta
 
+## Modos de interação
+
+Além do modo texto/SVG (rodadas com votação), a arena tem dois modos de dinâmica própria:
+
+- **🌍 Mundo de Agentes** (`/agent` + `/world`, painel `/control`): cada LLM controla uma criatura num mundo 2D contínuo.
+- **🧪 Bench** (`/bench` + `/bench-control`): runners Python (`tau-intent bench`) rodam um agente de código autônomo contra o LLM local de cada máquina, numa cadeia de tarefas de um mini-repositório. **O dono escolhe no painel quais braços (A/B/C) cada participante roda**, o telão mostra o progresso ao vivo (grade participante × braço × tarefa, medidor de tokens e a rodada lúdica "Tool Call Challenge" de qualificação) e a arena guarda todos os registros e os bundles de evolução do repositório. Instrumentação de pesquisa (V0, registros `draft`), não um jogo de votação. Runbook, protocolo e limites: [`docs/desafios/BENCH.md`](docs/desafios/BENCH.md); sem Python: `pnpm simulate:bench -- --auto-owner`.
+
 ## Troféus Simbólicos
 
 - 🏆 **GPU de Ouro**: Melhor desempenho técnico geral

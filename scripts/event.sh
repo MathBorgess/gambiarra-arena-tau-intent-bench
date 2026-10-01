@@ -66,6 +66,9 @@ cat <<BANNER
   • Controle (você):       http://localhost:5173/control
   • Telão / projetor:      http://localhost:5173/world
   • Participantes abrem:   http://$IP:3000/agent
+  • Bench (tau-intent):    controle http://localhost:5173/bench-control
+                           telão    http://localhost:5173/bench
+                           runners  ws://$IP:3000/ws
   Ctrl+C encerra tudo.
 ════════════════════════════════════════════════════════════
 BANNER
