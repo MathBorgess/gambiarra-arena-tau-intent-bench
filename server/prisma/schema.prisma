@@ -21,6 +21,9 @@ model Session {
   participants Participant[]
   rounds       Round[]
   events       EventLog[]
+  benchAssignments BenchAssignment[]
+  benchRecords     BenchRecord[]
+  benchArtifacts   BenchArtifact[]
 
   @@map("sessions")
 }
@@ -122,4 +125,80 @@ model EventLog {
   @@index([eventType])
   @@index([timestamp])
   @@map("event_logs")
+}
+
+// ============ BENCH MODE (tau-intent runner x arms A/B/C) ============
+// Deliberately NOT related to `Participant`: kicking a participant deletes it in
+// cascade, and bench data is thesis evidence that must survive that.
+
+// One row per cell (= one bench_assign issued to one runner). The `planned` row is the
+// owner's choice for the runner's NEXT cell; it is edited in place until it is sent.
+model BenchAssignment {
+  id                 String    @id @default(uuid())
+  sessionId          String
+  cellId             String    @unique
+  participantId      String
+  mode               String    // qualification | bench
+  arms               String    // JSON array, ordered, e.g. ["B","A","C"]
+  armsSource         String    // owner | default_shuffled
+  seed               Int       // stored per cell: arm-order shuffle + model seed
+  kMax               Int
+  deadlineS          Int
+  maxProductiveTurns Int
+  status             String    @default("planned") // planned | sent | running | stopping | done | stopped | error
+  joinInfo           String?   // JSON: the bench_join payload in force when the cell was sent
+  summary            String?   // JSON: bench_cell_done payload (records, manifest_sha256, truncated)
+  createdAt          DateTime  @default(now())
+  sentAt             DateTime?
+  doneAt             DateTime?
+  session            Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([participantId])
+  @@map("bench_assignments")
+}
+
+// Records are stored AS RECEIVED (`raw`); the other columns are indexes for queries.
+// Never recomputed by the server. (cellId, rawSha256) makes a retry idempotent.
+model BenchRecord {
+  id            String   @id @default(uuid())
+  sessionId     String
+  cellId        String
+  participantId String
+  armId         String   // A | B | C | Q
+  taskIndex     Int
+  oraclePass    Boolean?
+  tokensIn      Int?
+  tokensOut     Int?
+  terminatedBy  String
+  receivedAt    DateTime @default(now())
+  rawSha256     String
+  raw           String   // JSON, exactly the record object the runner sent
+  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([cellId, rawSha256])
+  @@index([sessionId])
+  @@index([cellId])
+  @@index([participantId])
+  @@index([armId, taskIndex])
+  @@map("bench_records")
+}
+
+// Cell bundle uploaded over HTTP. A re-upload with different content keeps the
+// previous file as <cellId>.v<n>.tar.gz (version n); the newest is <cellId>.tar.gz.
+model BenchArtifact {
+  id            String   @id @default(uuid())
+  sessionId     String
+  cellId        String
+  participantId String?
+  path          String   // relative to the bench data dir: <sessionId>/<file>
+  sha256        String
+  bytes         Int
+  version       Int      @default(1)
+  createdAt     DateTime @default(now())
+  session       Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([cellId, version])
+  @@index([sessionId])
+  @@map("bench_artifacts")
 }
