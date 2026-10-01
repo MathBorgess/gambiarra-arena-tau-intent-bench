@@ -129,18 +129,37 @@ export const BenchArmIdSchema = z.enum(BENCH_ARM_IDS);
 export const BenchArmSchema = z.enum(BENCH_ARMS);
 export const BenchModeSchema = z.enum(BENCH_MODES);
 
-const BenchModelSchema = z.object({
-  id: z.string().min(1),
-  digest: z.string().nullable().optional(),
-  runner_kind: z.enum(BENCH_RUNNER_KINDS),
-});
+const BenchModelSchema = z
+  .object({
+    id: z.string().min(1),
+    digest: z.string().nullable().optional(),
+    runner_kind: z.enum(BENCH_RUNNER_KINDS),
+  })
+  .passthrough();
 
-const BenchHardwareSchema = z.object({
-  os: z.string(),
-  chip: z.string(),
-  ram_gb: z.number().nonnegative(),
-  accel: z.enum(BENCH_ACCELS),
-});
+/**
+ * V0.2: with `--hardware-source declared` the runner cannot read the participant's hardware. Undeclared
+ * values are null; the real declared values travel in `declared`, and `source` says which to trust
+ * (`declared` -> prefer `declared`, `local` -> the top-level fields, V0 behaviour). Extra keys are kept.
+ */
+const BenchDeclaredHardwareSchema = z
+  .object({
+    chip: z.string().nullable().optional(),
+    ram_gb: z.number().nonnegative().nullable().optional(),
+    accel: z.enum(BENCH_ACCELS).nullable().optional(),
+  })
+  .passthrough();
+
+const BenchHardwareSchema = z
+  .object({
+    os: z.string(),
+    chip: z.string().nullable(),
+    ram_gb: z.number().nonnegative().nullable(),
+    accel: z.enum(BENCH_ACCELS).nullable(),
+    source: z.enum(['declared', 'local']).optional(),
+    declared: BenchDeclaredHardwareSchema.nullable().optional(),
+  })
+  .passthrough();
 
 // Runner enters the bench (sent after `register`)
 export const BenchJoinMessageSchema = z.object({
@@ -184,8 +203,21 @@ export const BenchRecordSchema = z
     task_index: nonNegInt,
     task_id: z.string(),
     task_hash: z.string(),
-    model: BenchModelSchema.passthrough(),
-    hardware: BenchHardwareSchema.passthrough(),
+    model: BenchModelSchema.passthrough(), // V0.2: model.details {family, parameter_size, quantization_level} rides along
+    hardware: BenchHardwareSchema,
+    // V0.2 (docs/BENCH-V0.2 §3). Never carries the raw host: only provider_host_sha256.
+    backend: z
+      .object({
+        backend_id: z.string().nullable().optional(),
+        transport: z.string().nullable().optional(),
+        provider_host_sha256: z.string().nullable().optional(),
+        ollama_version: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    // kind: backend_unreachable | provider_error | instrument_error | not_run (kept a plain string: a new kind must not drop a record)
+    error: z.object({ kind: z.string() }).passthrough().nullable().optional(),
     arm_order: z.array(BenchArmSchema),
     seed: z.number().int(),
     mechanism: z
@@ -223,6 +255,8 @@ export const BenchRecordSchema = z
           tokens_in: z.number().nonnegative().nullable().optional(),
           tokens_out: z.number().nonnegative().nullable().optional(),
           tool_calls: z.number().int().min(0).optional(),
+          latency_ms: z.number().nonnegative().nullable().optional(),
+          ttft_ms: z.number().nonnegative().nullable().optional(),
         })
         .passthrough()
     ),

@@ -17,7 +17,7 @@ import {
 } from './bench.js';
 import { MemoryBenchStore } from './bench-store.js';
 import { BundleError, storeBundle } from './bench-artifacts.js';
-import { BenchRecordMessageSchema, type BenchJoinMessage } from '../ws/schemas.js';
+import { BenchJoinMessageSchema, BenchRecordMessageSchema, type BenchJoinMessage } from '../ws/schemas.js';
 
 const logger: any = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -369,6 +369,46 @@ describe('BenchEngine', () => {
     expect(p.cell).toMatchObject({ cell_id: cellId, status: 'running', arms: ['A', 'B'] });
     expect(p.grid.find((g) => g.arm_id === 'A')).toMatchObject({ phase: 'done', oracle_pass: true });
     engine2.cleanup();
+  });
+  it('stores V0.2 record fields as received and keeps the declared hardware in the join state', async () => {
+    const declared = { ...join('m1'), hardware: { os: 'linux', chip: null, ram_gb: null, accel: null, source: 'declared', declared: { chip: 'M2', ram_gb: 16, accel: 'metal' } } };
+    await engine.handleJoin('m1', BenchJoinMessageSchema.parse(declared), { nickname: 'M1', sessionId: S });
+    const st = (await engine.state(S)).participants[0] as any;
+    expect(st.join.hardware).toMatchObject({ source: 'declared', declared: { chip: 'M2', ram_gb: 16, accel: 'metal' }, chip: null });
+    await engine.assign(S, { participantId: 'm1', arms: ['B'], mode: 'bench' });
+    await engine.start(S, { mode: 'bench' });
+    const cellId = assignsTo('m1')[0].cell_id;
+    const extra = {
+      hardware: declared.hardware,
+      backend: { backend_id: 'b-m1-000000', transport: 'lan', provider_host_sha256: 'cd'.repeat(32), ollama_version: '0.6.5' },
+      error: { kind: 'provider_error', detail: 'HTTP 500' },
+      turns: [{ turn_index: 1, kind: 'productive', tokens_in: 1, tokens_out: 1, tool_calls: 0, latency_ms: 900, ttft_ms: 80 }],
+    };
+    const r = recMsg(cellId, rec(cellId, 'm1', 'B', 1, true, extra));
+    expect(await engine.handleRecord('m1', r.msg, r.raw)).toMatchObject({ ok: true });
+    const stored = JSON.parse(store.records[0].raw);
+    expect(stored.backend).toEqual(extra.backend);
+    expect(stored.error).toEqual(extra.error);
+    expect(stored.turns[0]).toMatchObject({ latency_ms: 900, ttft_ms: 80 });
+    expect(stored.hardware.declared.chip).toBe('M2');
+  });
+
+  it('a cell that loses its backend: one bench_error (host redacted), then truncated cell_done -> stopped, error kept', async () => {
+    await joinAll('m1');
+    await engine.assign(S, { participantId: 'm1', arms: ['B'], mode: 'bench' });
+    await engine.start(S, { mode: 'bench' });
+    const cellId = assignsTo('m1')[0].cell_id;
+    engine.handleProgress('m1', { type: 'bench_progress', cell_id: cellId, arm_id: 'B', task_index: 1, phase: 'turn', turn: 1 });
+    engine.handleError('m1', { type: 'bench_error', cell_id: cellId, code: 'backend_unreachable', message: 'connect ECONNREFUSED 192.168.77.123:11434 (http://192.168.77.123:11434/v1)' });
+    let st = (await engine.state(S)).participants[0];
+    expect(st.cell!.status).toBe('running'); // a running cell is not killed by the error
+    expect(st.cell!.last_error).toMatchObject({ code: 'backend_unreachable' });
+    expect(st.cell!.last_error!.message).not.toContain('192.168.77.123');
+    expect(JSON.stringify(events.events)).not.toContain('192.168.77.123');
+    expect(await engine.handleCellDone('m1', { type: 'bench_cell_done', cell_id: cellId, records: 0, manifest_sha256: 'ab', truncated: true })).toMatchObject({ ok: true });
+    st = (await engine.state(S)).participants[0];
+    expect(st.cell!.status).toBe('stopped');
+    expect(st.cell!.last_error!.code).toBe('backend_unreachable');
   });
 });
 

@@ -1,3 +1,4 @@
+import { redactHosts } from './bench-backends.js';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import type { FastifyBaseLogger } from 'fastify';
 import type { EventLogger, EventType } from './eventlog.js';
@@ -653,7 +654,9 @@ export class BenchEngine {
     return { ok: true };
   }
 
-  handleError(participantId: string, msg: BenchErrorMessage) {
+  handleError(participantId: string, rawMsg: BenchErrorMessage) {
+    // V0.2: a lost-backend error quotes the participant's address; keep it out of the event log and the panel.
+    const msg = { ...rawMsg, message: redactHosts(rawMsg.message) };
     const cell = this.cells.get(msg.cell_id);
     this.logger.warn({ participantId, cellId: msg.cell_id, code: msg.code, message: msg.message }, 'BENCH_RUNNER_ERROR');
     this.logEvent('bench_error', 'participant', participantId, {

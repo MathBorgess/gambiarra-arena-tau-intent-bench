@@ -20,6 +20,7 @@ import {
   parseVersion,
   probeOllama,
   providerUrl,
+  redactHosts,
   slugify,
   type ProbeResult,
 } from './bench-backends.js';
@@ -83,6 +84,17 @@ const fake = async (o?: FakeOpts) => {
 };
 
 // ------------------------------------------------------------ helpers
+
+describe('redactHosts', () => {
+  it('removes participant addresses from runner error text, keeps loopback', () => {
+    expect(redactHosts('connect ECONNREFUSED 192.168.1.5:11434')).toBe('connect ECONNREFUSED [host]:11434');
+    expect(redactHosts('GET http://192.168.1.5:11434/v1/chat failed')).toBe('GET http://[host]:11434/v1/chat failed');
+    expect(redactHosts('http://ana-pc.local:11434/v1 timed out')).toBe('http://[host]:11434/v1 timed out');
+    expect(redactHosts('http://[fe80::1]:11434/v1')).toBe('http://[host]:11434/v1');
+    expect(redactHosts('arena at 127.0.0.1:3000 and http://localhost:3000')).toBe('arena at 127.0.0.1:3000 and http://localhost:3000');
+    expect(redactHosts('no address here')).toBe('no address here');
+  });
+});
 
 describe('host and id helpers', () => {
   it('normalises IPv4-mapped IPv6, brackets, zones and case', () => {

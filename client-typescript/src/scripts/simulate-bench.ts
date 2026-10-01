@@ -139,7 +139,9 @@ class FakeRunner {
     readonly participantId: string,
     readonly nickname: string,
     private pin: string,
-    modelOverride?: string
+    modelOverride?: string,
+    /** V0.2: runner for a remote backend -> declared hardware (undeclared = null) and the record's `backend` block. */
+    private backendInfo?: { hostSha256: string; declared: { chip: string | null; ram_gb: number | null; accel: string | null } }
   ) {
     const model = modelOverride ?? MODELS[(index - 1) % MODELS.length].name;
     this.joinPayload = {
@@ -149,7 +151,9 @@ class FakeRunner {
       tau_intent_sha: 'simulated-tau-intent-sha',
       task_set_sha: 'simulated-task-set-sha',
       model: { id: model, digest: index % 2 ? `sha256:${createHash('sha256').update(model).digest('hex')}` : null, runner_kind: 'ollama' },
-      hardware: { os: 'linux-sim', chip: index % 2 ? 'Apple M2 (sim)' : 'RTX 4070 (sim)', ram_gb: index % 2 ? 16 : 32, accel: index % 2 ? 'metal' : 'cuda' },
+      hardware: backendInfo
+        ? { os: 'linux-sim', chip: null, ram_gb: null, accel: null, source: 'declared', declared: backendInfo.declared }
+        : { os: 'linux-sim', chip: index % 2 ? 'Apple M2 (sim)' : 'RTX 4070 (sim)', ram_gb: index % 2 ? 16 : 32, accel: index % 2 ? 'metal' : 'cuda' },
     };
   }
 
@@ -251,6 +255,9 @@ class FakeRunner {
       tokens: { in: sum('tokens_in'), out: sum('tokens_out'), rescue_in: sum('tokens_in', 'rescue'), rescue_out: sum('tokens_out', 'rescue'), source: 'provider_usage', cost_usd: 0 },
       turns,
       mechanism_telemetry: { verdict: mech ? 'PASSA' : null, productive_turns: productive, block_turns: block, bloco_vazio: false, tokens_served: mech ? 210 : 0, nao_avaliaveis: [], servidas: [] },
+      ...(this.backendInfo
+        ? { backend: { backend_id: this.participantId, transport: 'lan', provider_host_sha256: this.backendInfo.hostSha256, ollama_version: '0.6.5-sim' }, error: null }
+        : {}),
       terminated_by: over.terminated ?? 'completed',
       started_at: started.toISOString(),
       ended_at: new Date().toISOString(),
@@ -495,7 +502,10 @@ async function main() {
     if (PIN) {
       console.log(`\nStarting ${ready.length} simulated runners (participant_id = backend_id) -> ${SERVER_URL}\n`);
       for (const b of ready) {
-        const r = new FakeRunner(b.index, b.backendId, b.nickname, PIN, b.model);
+        const r = new FakeRunner(b.index, b.backendId, b.nickname, PIN, b.model, {
+          hostSha256: createHash('sha256').update(b.host).digest('hex'),
+          declared: b.index % 2 ? { chip: 'Apple M2 (sim)', ram_gb: 16, accel: 'metal' } : { chip: 'RTX 4070 (sim)', ram_gb: 32, accel: 'cuda' },
+        });
         await r.connect();
         runners.push(r);
         await sleep(60);

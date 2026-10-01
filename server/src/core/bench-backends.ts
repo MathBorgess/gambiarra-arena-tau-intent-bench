@@ -159,6 +159,17 @@ export function makeBackendId(nickname: string, host: string, port: number, mode
 
 export const BACKEND_ID_RE = /^b-[a-z0-9-]{1,40}-[0-9a-f]{6}$/;
 
+/**
+ * Strip addresses from free text a runner sends (a connection error often quotes the provider URL,
+ * e.g. "connect ECONNREFUSED 192.168.1.5:11434"): the event log and panel must never carry a raw host.
+ * Replaces IPv4 literals and the host part of http(s) URLs; loopback is left alone (not a participant).
+ */
+export function redactHosts(text: string): string {
+  return (text ?? '')
+    .replace(/\b(https?:\/\/)(\[[0-9a-fA-F:.]+\]|[^\s/:?#'"]+)/gi, (m, scheme: string, host: string) => (isLoopbackHost(host) ? m : `${scheme}[host]`))
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, (ip) => (isLoopbackHost(ip) ? ip : '[host]'));
+}
+
 export function providerUrl(host: string, port: number): string {
   const h = normalizeHost(host);
   return `http://${h.includes(':') ? `[${h}]` : h}:${port}/v1`;

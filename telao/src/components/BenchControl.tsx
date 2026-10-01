@@ -3,10 +3,13 @@ import { useToast } from '../hooks/useToast';
 import { ToastContainer } from './Toast';
 import QRCodeGenerator from './QRCodeGenerator';
 import { useBenchState } from '../bench/useBenchState';
+import { useBackends } from '../bench/useBackends';
 import {
   ARM_COLOR,
   ARM_LABEL,
   fmtDuration,
+  fmtHardware,
+  type BenchBackendView,
   type BenchArm,
   type BenchMode,
   type BenchParticipant,
@@ -38,6 +41,18 @@ const CELL_CHIP: Record<string, string> = {
   done: 'bg-green-700 text-green-100',
   stopped: 'bg-orange-800 text-orange-100',
   error: 'bg-red-700 text-red-100',
+};
+
+const RUNNER_CHIP: Record<BenchBackendView['runner']['status'], { label: string; cls: string }> = {
+  waiting: { label: 'aguardando runner', cls: 'bg-gray-700 text-gray-300' },
+  connected: { label: 'runner conectado', cls: 'bg-green-700 text-green-100' },
+  running: { label: 'rodando célula', cls: 'bg-cyan-700 text-cyan-100 animate-pulse' },
+};
+
+const ago = (t: number | null) => {
+  if (!t) return '—';
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  return s < 60 ? `${s}s atrás` : s < 3600 ? `${Math.round(s / 60)} min atrás` : `${Math.round(s / 3600)} h atrás`;
 };
 
 const short = (s: string | null | undefined, n = 8) => (s ? s.replace(/^sha256:/, '').slice(0, n) : '—');
@@ -92,6 +107,7 @@ function ArmPicker({ arms, onChange, disabled }: { arms: BenchArm[]; onChange: (
 export function BenchControl() {
   const toast = useToast();
   const { state, connected, refresh } = useBenchState('bench-control');
+  const { data: backendData, refresh: refreshBackends } = useBackends();
   const [session, setSession] = useState<Session | null>(null);
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<BenchMode>('qualification');
@@ -102,6 +118,10 @@ export function BenchControl() {
 
   const host = window.location.hostname;
   const wsUrl = `ws://${host}:3000/ws`;
+  // Participants need the LAN address, not "localhost": prefer the one the server reports.
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  const joinUrl = isLocalHost ? backendData?.join_urls[0] ?? `http://${host}:3000/bench-join` : `http://${host}:3000/bench-join`;
+  const backends = backendData?.backends ?? [];
   const challengeUrl = '/bench';
 
   const loadSession = useCallback(async () => {
@@ -229,6 +249,18 @@ export function BenchControl() {
     setBusy(false);
   };
 
+  const toggleBackend = async (b: BenchBackendView) => {
+    const res = await call(`/bench/backends/${b.backend_id}`, { enabled: !b.enabled });
+    if (res) toast.success(`${b.nickname}: ${res.enabled ? 'ligado' : 'desligado'}`);
+    await refreshBackends();
+  };
+
+  const reprobeBackend = async (b: BenchBackendView) => {
+    const res = await call(`/bench/backends/${b.backend_id}/probe`, {});
+    if (res) toast[res.ready ? 'success' : 'info'](`${b.nickname}: ${res.ready ? 'alcançável' : res.problems.map((p: any) => p.code).join(', ') || 'com problema'}`);
+    await refreshBackends();
+  };
+
   const participants = state?.participants ?? [];
   const running = state?.running ?? false;
   const taskSetMismatch = (state?.shas.task_set.length ?? 0) > 1;
@@ -272,14 +304,14 @@ export function BenchControl() {
                   🔄 Nova sessão
                 </button>
                 <div className="border-t border-gray-700 pt-3">
-                  <p className="text-sm text-gray-400 mb-1">Cada máquina roda (Python):</p>
+                  <p className="text-sm text-gray-400 mb-1">O orquestrador sobe um runner por backend (na máquina do dono):</p>
                   <pre className="bg-black/40 rounded p-2 text-[11px] text-cyan-300 whitespace-pre-wrap break-all select-all">{`tau-intent bench --server ${wsUrl} --pin ${session.pin} \\
-  --participant-id <id> --nickname "<nome>" \\
-  --provider-url http://localhost:11434/v1 --model <modelo> \\
-  --taskset <taskset/> --out <pasta>`}</pre>
-                  <div className="bg-white rounded p-2 inline-block mt-3">
-                    <QRCodeGenerator value={wsUrl} size={90} />
-                  </div>
+  --participant-id <backend_id> --backend-id <backend_id> \\
+  --provider-url <provider_url> --model <modelo> \\
+  --runner-kind ollama --hardware-source declared`}</pre>
+                  <p className="text-[11px] text-gray-500 mt-2">
+                    <code>python -m mathai_harness.orchestrator up</code> faz isso sozinho a partir da tabela de backends.
+                  </p>
                 </div>
               </>
             ) : (
@@ -357,6 +389,101 @@ export function BenchControl() {
           </div>
         )}
 
+        {/* Backends (V0.2): participants' Ollamas, registered from /bench-join */}
+        <div className="bg-gray-800 rounded-xl p-6 mb-6">
+          <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-xl font-bold">Backends ({backends.length})</h2>
+              <p className="text-sm text-gray-400 max-w-xl">
+                O Ollama de cada participante, alcançado pela rede. O orquestrador sobe um runner por backend ligado e alcançável, com <code>participant_id = backend_id</code>.
+              </p>
+            </div>
+            <div className="flex items-center gap-3 bg-gray-900/60 rounded-lg p-3">
+              <QRCodeGenerator value={joinUrl} size={96} />
+              <div>
+                <p className="text-xs text-gray-400">Participantes abrem:</p>
+                <p className="font-mono text-cyan-300 text-sm break-all select-all">{joinUrl}</p>
+                {isLocalHost && !backendData?.join_urls.length && <p className="text-[11px] text-yellow-300 mt-1">Abra o painel pelo IP da rede para o QR sair certo.</p>}
+              </div>
+            </div>
+          </div>
+
+          {backends.length === 0 ? (
+            <p className="text-gray-500 text-sm">Nenhum backend registrado ainda. Peça aos participantes para abrir o endereço ao lado.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-400 border-b border-gray-700">
+                    <th className="py-2 pr-3">Participante</th>
+                    <th className="pr-3">Modelo</th>
+                    <th className="pr-3">Digest · Ollama</th>
+                    <th className="pr-3">Alcançável</th>
+                    <th className="pr-3">Runner</th>
+                    <th className="pr-3">Ligado</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backends.map((b) => {
+                    const d = b.model.details;
+                    const rc = RUNNER_CHIP[b.runner.status];
+                    const hw = b.declared_hardware;
+                    return (
+                      <tr key={b.backend_id} className={`border-b border-gray-700/60 align-top ${b.enabled ? '' : 'opacity-50'}`}>
+                        <td className="py-3 pr-3">
+                          <div className="font-bold">{b.nickname}</div>
+                          <div className="text-xs text-gray-500 font-mono">{b.backend_id}</div>
+                          <div className="text-[11px] text-gray-600 font-mono" title="sha256 do host; o IP nunca aparece aqui">host {short(b.host_sha256, 8)} · :{b.port}</div>
+                          {hw && (hw.chip || hw.ram_gb || hw.accel) && (
+                            <div className="text-[11px] text-gray-500">declarado: {[hw.chip, hw.ram_gb ? `${hw.ram_gb} GB` : null, hw.accel].filter(Boolean).join(' · ')}</div>
+                          )}
+                        </td>
+                        <td className="pr-3">
+                          <div className="font-mono text-cyan-300">{b.model.id}</div>
+                          <div className="text-xs text-gray-400">{d ? [d.family, d.parameter_size, d.quantization_level].filter(Boolean).join(' · ') : '—'}</div>
+                        </td>
+                        <td className="pr-3 text-xs font-mono">
+                          <div className="text-gray-400" title={b.model.digest ?? 'sem digest'}>digest {short(b.model.digest, 12)}</div>
+                          <div className="text-gray-500">ollama {b.ollama_version ?? '—'}</div>
+                        </td>
+                        <td className="pr-3">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${b.reachable && b.problems.length === 0 ? 'bg-green-700 text-green-100' : b.reachable ? 'bg-yellow-700 text-yellow-100' : 'bg-red-700 text-red-100'}`}>
+                            {b.reachable && b.problems.length === 0 ? 'alcançável' : b.reachable ? 'sem o modelo' : 'inalcançável'}
+                          </span>
+                          {b.problems.map((p) => (
+                            <div key={p.code} className="text-[11px] text-red-300 mt-1" title={p.fix}>{p.code}{p.detail ? ` · ${p.detail}` : ''}</div>
+                          ))}
+                          <div className="text-[11px] text-gray-500 mt-1">checado {ago(b.last_probe_at)}</div>
+                        </td>
+                        <td className="pr-3">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${rc.cls}`}>{rc.label}</span>
+                          {b.runner.cell_id && (
+                            <div className="text-[11px] font-mono text-gray-500 mt-1" title={b.runner.cell_id}>
+                              {b.runner.cell_status} · {b.runner.records} reg.
+                            </div>
+                          )}
+                        </td>
+                        <td className="pr-3">
+                          <label className="inline-flex items-center gap-2 cursor-pointer select-none" title="Desligado: o orquestrador não sobe runner para este backend">
+                            <input type="checkbox" className="w-4 h-4" checked={b.enabled} onChange={() => toggleBackend(b)} />
+                            <span className="text-xs text-gray-400">{b.enabled ? 'ligado' : 'desligado'}</span>
+                          </label>
+                        </td>
+                        <td>
+                          <button onClick={() => reprobeBackend(b)} className="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-xs font-bold" title="Testar de novo o Ollama deste participante">
+                            ↻ testar
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
         {/* Runners */}
         <div className="bg-gray-800 rounded-xl p-6 mb-6">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -409,7 +536,7 @@ export function BenchControl() {
                         <td className="pr-3">
                           <div className="font-mono text-cyan-300">{p.join?.model.id ?? '—'}</div>
                           <div className="text-xs text-gray-400">
-                            {p.join ? `${p.join.model.runner_kind} · ${p.join.hardware.chip} · ${p.join.hardware.ram_gb} GB · ${p.join.hardware.accel}` : ''}
+                            {p.join ? `${p.join.model.runner_kind} · ${fmtHardware(p.join.hardware)}` : ''}
                           </div>
                           <div className="text-xs text-gray-500 font-mono" title={p.join?.model.digest ?? 'sem digest'}>
                             digest {short(p.join?.model.digest)}
@@ -465,7 +592,11 @@ export function BenchControl() {
                                   bundle ✓ v{cell.artifact.version} · {(cell.artifact.bytes / 1024).toFixed(1)} KB · {short(cell.artifact.sha256, 8)}
                                 </a>
                               )}
-                              {cell.last_error && <div className="text-[11px] text-red-400">erro: {cell.last_error.code}</div>}
+                              {cell.last_error && (
+                                <div className="text-[11px] text-red-400" title={cell.last_error.message}>
+                                  {cell.last_error.code.startsWith('backend') ? '⚠ backend perdido' : `erro: ${cell.last_error.code}`}
+                                </div>
+                              )}
                             </>
                           ) : (
                             <span className="text-gray-500 text-xs">ainda não rodou</span>

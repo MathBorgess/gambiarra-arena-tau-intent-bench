@@ -3,6 +3,7 @@ import { useBenchState } from '../bench/useBenchState';
 import {
   ARM_COLOR,
   ARM_LABEL,
+  effectiveHardware,
   fmtTokens,
   type BenchArm,
   type BenchArmId,
@@ -133,7 +134,7 @@ function ParticipantCard({ p, maxTok }: { p: BenchParticipant; maxTok: number })
         <span className={`w-2.5 h-2.5 rounded-full self-center ${p.connected ? 'bg-[#39FF14]' : 'bg-gray-600'}`} />
         <span className="text-xl font-bold truncate">{p.nickname}</span>
         <span className="text-xs text-gray-400 font-mono truncate flex-1">
-          {p.join?.model.id ?? ''} {p.join ? `· ${p.join.hardware.chip}` : ''}
+          {p.join?.model.id ?? ''} {p.join ? `· ${effectiveHardware(p.join.hardware).chip ?? 'hw n/d'}` : ''}
         </span>
         {chip && p.cell && <span className={`text-xs px-2 py-0.5 rounded-full border ${chip.cls}`}>{chip.label}</span>}
       </div>

@@ -294,4 +294,55 @@ describe('Bench mode schemas (contract §3/§4)', () => {
       expect(BenchStopMessageSchema.safeParse({ type: 'bench_stop', cell_id: 'c' }).success).toBe(true);
     });
   });
+
+  describe('V0.2 hardware (declared) and backend fields', () => {
+    it('bench_join keeps hardware.source and hardware.declared (not stripped)', () => {
+      const hardware = { os: 'linux', chip: null, ram_gb: null, accel: null, source: 'declared', declared: { chip: 'Apple M2', ram_gb: 16, accel: 'metal' } };
+      const parsed = BenchJoinMessageSchema.parse({ ...join, hardware });
+      expect(parsed.hardware.source).toBe('declared');
+      expect(parsed.hardware.declared).toEqual({ chip: 'Apple M2', ram_gb: 16, accel: 'metal' });
+      expect(BenchJoinMessageSchema.safeParse({ ...join, hardware: { ...hardware, source: 'cloud' } }).success).toBe(false);
+    });
+
+    it('bench_join accepts null chip / ram_gb / accel (undeclared), and keeps unknown hardware keys', () => {
+      const hardware = { os: 'linux', chip: null, ram_gb: null, accel: null, source: 'declared', declared: { chip: null, ram_gb: null, accel: null }, future: 1 };
+      const r = BenchJoinMessageSchema.safeParse({ ...join, hardware });
+      expect(r.success).toBe(true);
+      expect((r.success && (r.data.hardware as Record<string, unknown>).future)).toBe(1);
+      // the V0 shape still passes, and a wrong accelerator is still refused
+      expect(BenchJoinMessageSchema.safeParse(join).success).toBe(true);
+      expect(BenchJoinMessageSchema.safeParse({ ...join, hardware: { ...hardware, accel: 'tpu' } }).success).toBe(false);
+    });
+
+    it('bench_record accepts null hardware fields and keeps hardware.source / declared', () => {
+      const hardware = { os: 'linux', chip: null, ram_gb: null, accel: null, source: 'declared', declared: { chip: 'RTX 4070', ram_gb: 32, accel: 'cuda' } };
+      const r = BenchRecordSchema.parse(record('B', { hardware }));
+      expect(r.hardware.source).toBe('declared');
+      expect(r.hardware.declared).toEqual({ chip: 'RTX 4070', ram_gb: 32, accel: 'cuda' });
+      expect(r.hardware.chip).toBeNull();
+    });
+
+    it('bench_record keeps backend, model.details, error and per-turn latency_ms / ttft_ms', () => {
+      const extra = {
+        backend: { backend_id: 'b-ana-1a2b3c', transport: 'lan', provider_host_sha256: 'ab'.repeat(32), ollama_version: '0.6.5' },
+        model: { id: 'qwen2.5-coder:7b', digest: 'sha256:aa', runner_kind: 'ollama', details: { family: 'qwen2', parameter_size: '7.6B', quantization_level: 'Q4_K_M' } },
+        error: { kind: 'backend_unreachable', detail: 'ECONNREFUSED' },
+        turns: [{ turn_index: 1, kind: 'productive', tokens_in: 10, tokens_out: 5, tool_calls: 1, latency_ms: 1234, ttft_ms: 210 }],
+      };
+      const r = BenchRecordSchema.parse(record('B', extra)) as Record<string, any>;
+      expect(r.backend).toEqual(extra.backend);
+      expect(r.model.details).toEqual(extra.model.details);
+      expect(r.error).toEqual(extra.error);
+      expect(r.turns[0].latency_ms).toBe(1234);
+      expect(r.turns[0].ttft_ms).toBe(210);
+      // all of them optional / nullable: a V0 record and a "no error" record both pass
+      expect(BenchRecordSchema.safeParse(record('B')).success).toBe(true);
+      expect(BenchRecordSchema.safeParse(record('B', { error: null, backend: null })).success).toBe(true);
+      // every documented error.kind passes; an unknown kind must not drop the record
+      for (const kind of ['backend_unreachable', 'provider_error', 'instrument_error', 'not_run', 'something_new']) {
+        expect(BenchRecordSchema.safeParse(record('B', { error: { kind, detail: null } })).success, kind).toBe(true);
+      }
+      expect(BenchRecordSchema.safeParse(record('B', { error: { detail: 'no kind' } })).success).toBe(false);
+    });
+  });
 });

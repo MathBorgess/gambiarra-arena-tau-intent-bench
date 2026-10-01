@@ -1,5 +1,5 @@
 import type { BenchParticipant, BenchState, Qualification } from '../bench/types';
-import { fmtDuration, fmtTokens } from '../bench/types';
+import { effectiveHardware, fmtDuration, fmtTokens } from '../bench/types';
 
 /**
  * "Tool Call Challenge" — the playful face of the qualification round (Q0).
@@ -128,7 +128,7 @@ export default function ToolCallChallenge({ state }: { state: BenchState }) {
                 <div className="text-2xl font-bold truncate">{p.nickname}</div>
                 <div className="text-sm text-gray-400 font-mono truncate">
                   {p.join?.model.id ?? '—'}
-                  {p.join ? ` · ${p.join.hardware.chip}` : ''}
+                  {p.join ? ` · ${effectiveHardware(p.join.hardware).chip ?? 'hw n/d'}` : ''}
                 </div>
               </div>
 
