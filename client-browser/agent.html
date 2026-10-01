@@ -45,6 +45,7 @@
     .protocol-banner p { font-size:.88rem; color:var(--text-secondary); margin-bottom:.35rem; }
     .protocol-banner code { background:var(--bg-input); border-radius:5px; padding:.1rem .4rem; }
     #prompt-template { font-family:var(--mono); font-size:.82rem; min-height:180px; }
+    #protocol-text { font-family:var(--mono); font-size:.82rem; min-height:110px; }
     #template-hints { font-size:.78rem; margin-top:.4rem; font-family:var(--mono); }
     .tpl-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:.3rem; }
     .tpl-head label { margin:0; }
@@ -108,8 +109,10 @@
         <h3>📡 Protocolo do agente — como fazer seu agente andar</h3>
         <p>A cada pulso, seu agente <b>recebe o radar</b> (o que ele vê) e precisa <b>responder em uma linha</b>:</p>
         <p><code>MOVE: &lt;N|NE|E|SE|S|SW|W|NW|STAY&gt; | comentário curto</code></p>
-        <p>No template abaixo, os placeholders <code>{{radar}}</code> e <code>{{protocolo}}</code> garantem isso.
-           Se você removê-los, eles são anexados ao final automaticamente — seu agente nunca fica cego nem mudo.</p>
+        <p>O texto do <b>protocolo</b> também é seu: edite abaixo como pedir a direção ao modelo. A página só precisa
+           achar UMA das 9 direções na resposta (aceita <code>MOVE: SE</code>, <code>"SE"</code>, "vou para o sudeste"...).
+           Sem direção reconhecida, o agente fica parado (STAY).</p>
+        <p>O <code>{{radar}}</code> é o único bloco obrigatório: se você removê-lo do template, ele é anexado ao final.</p>
       </div>
 
       <fieldset style="margin-top:1.2rem;">
@@ -122,6 +125,13 @@
           <label for="strategy">Estratégia (como seu agente pensa)</label>
           <textarea id="strategy" placeholder="Descreva como seu agente deve se comportar..."></textarea>
           <div class="presets" id="presets"></div>
+        </div>
+        <div class="fg">
+          <div class="tpl-head">
+            <label for="protocol-text">Protocolo (entra no lugar de {{protocolo}})</label>
+            <button type="button" id="btn-protocol-reset" class="btn-tiny">↺ Restaurar padrão</button>
+          </div>
+          <textarea id="protocol-text" spellcheck="false"></textarea>
         </div>
         <div class="fg">
           <div class="tpl-head">
@@ -176,14 +186,20 @@
 
   const STORAGE_KEY = 'gambiarra-world-client';
 
-  // Bloco FIXO do protocolo de movimento: o conteúdo vem daqui (o participante
-  // não edita), mas o template controla ONDE ele entra via {{protocolo}}.
-  const PROTOCOL_BLOCK = [
+  // Protocolo PADRÃO de movimento: o participante edita o texto (campo
+  // "Protocolo") e o template controla ONDE ele entra via {{protocolo}}.
+  // O exemplo não cita direção nenhuma: até o 7º encontro ele dizia
+  // "MOVE: NE" e modelos pequenos copiavam (23% dos rumos em 22/08 foram NE,
+  // contra 12,5% esperados; 5 de 21 agentes passaram mais da metade do tempo
+  // rumo NE).
+  const DEFAULT_PROTOCOL = [
     'Dê o próximo passo escolhendo UMA direção da bússola:',
     'N (norte), NE (nordeste), E (leste), SE (sudeste), S (sul), SW (sudoeste), W (oeste), NW (noroeste). Use STAY só para ficar parado.',
     'Responda em UMA linha, começando com "MOVE:" seguido da direção e um comentário curto.',
-    'Exemplo: MOVE: NE | indo atrás da comida',
+    'Formato: MOVE: <direção> | <comentário curto>',
   ].join('\n');
+
+  const PROTOCOL_SEPARATOR = '\n\n===== PROTOCOLO =====\n';
 
   // Template padrão do prompt — o participante pode reescrever livremente.
   // Placeholders substituídos a cada pulso: {{objetivo}} {{estrategia}} {{radar}} {{protocolo}}
@@ -221,7 +237,7 @@
     serverUrl: defaultServerHost(), pin:'', nickname:'',
     runner:'ollama', llmUrl: RUNNERS.ollama.defaultUrl, model:'',
     temperature: 0.4, emoji:'🤖', strategy: PRESETS['Ganancioso'], think: true,
-    promptTemplate: DEFAULT_PROMPT_TEMPLATE,
+    promptTemplate: DEFAULT_PROMPT_TEMPLATE, protocolText: DEFAULT_PROTOCOL,
     // runtime
     participantId:'', objective:'', score:0, pulses:0, manual:false, deciding:false, lastPulse:0,
     save() {
@@ -229,7 +245,7 @@
         serverUrl:this.serverUrl, pin:this.pin, nickname:this.nickname,
         runner:this.runner, llmUrl:this.llmUrl, model:this.model, temperature:this.temperature,
         emoji:this.emoji, strategy:this.strategy, think:this.think,
-        promptTemplate:this.promptTemplate,
+        promptTemplate:this.promptTemplate, protocolText:this.protocolText,
       })); } catch(e){}
     },
     load() {
@@ -237,6 +253,7 @@
       if (!this.serverUrl) this.serverUrl = defaultServerHost();
       this.serverUrl = prettyServerHost(this.serverUrl) || defaultServerHost();
       if (!this.promptTemplate || !this.promptTemplate.trim()) this.promptTemplate = DEFAULT_PROMPT_TEMPLATE;
+      if (typeof this.protocolText !== 'string') this.protocolText = DEFAULT_PROTOCOL;
     },
   };
 
@@ -268,21 +285,19 @@
     return { dir, say };
   }
 
-  // Expande o template do participante a cada pulso. Guarda-corpos: se o
-  // template não tiver {{radar}} (agente cego) ou {{protocolo}} (agente mudo),
-  // os blocos são anexados ao final — a pessoa experimenta sem travar o jogo.
+  // Expande o template do participante a cada pulso. Só o {{radar}} tem
+  // guarda-corpo (sem ele o agente fica cego). O protocolo é aberto: quem
+  // apaga o {{protocolo}} ou esvazia o texto assume o risco de o modelo não
+  // dizer direção nenhuma, e o painel mostra isso (STAY).
   function buildPrompt(p, S) {
     let out = (S.promptTemplate || DEFAULT_PROMPT_TEMPLATE)
       .replaceAll('{{objetivo}}', p.objective || '')
       .replaceAll('{{estrategia}}', S.strategy || '')
-      .replaceAll('{{protocolo}}', PROTOCOL_BLOCK);
+      .replaceAll('{{protocolo}}', S.protocolText ?? DEFAULT_PROTOCOL);
     if (out.includes('{{radar}}')) {
       out = out.replaceAll('{{radar}}', p.radar_text || '');
     } else {
       out += '\n\n' + (p.radar_text || '');
-    }
-    if (!(S.promptTemplate || '').includes('{{protocolo}}')) {
-      out += '\n\n' + PROTOCOL_BLOCK;
     }
     return out;
   }
@@ -293,7 +308,8 @@
     const t = S.promptTemplate || '';
     const hints = [];
     if (!t.includes('{{radar}}')) hints.push('⚠️ sem {{radar}} — o radar será anexado ao final (seu agente não fica cego)');
-    if (!t.includes('{{protocolo}}')) hints.push('⚠️ sem {{protocolo}} — as instruções de movimento serão anexadas ao final');
+    if (!t.includes('{{protocolo}}')) hints.push('⚠️ sem {{protocolo}}: o texto do campo Protocolo não entra no prompt (garanta que o modelo responda com uma direção)');
+    else if (!(S.protocolText || '').trim()) hints.push('⚠️ protocolo vazio: o modelo não recebe instrução de como responder');
     if (!t.includes('{{estrategia}}')) hints.push('ℹ️ sem {{estrategia}} — o campo Estratégia acima será ignorado');
     el.innerHTML = hints.length ? hints.join('<br>') : '✓ template com todos os placeholders';
     el.style.color = hints.some(h => h.startsWith('⚠️')) ? 'var(--warning)' : 'var(--text-muted)';
@@ -311,7 +327,11 @@
   let promptReportTimer = null;
   function reportPromptTemplate() {
     if (client.ws?.readyState !== WebSocket.OPEN) return;
-    client.send({ type:'agent_prompt', participant_id:S.participantId, template:S.promptTemplate.slice(0, 4000), is_default: S.promptTemplate === DEFAULT_PROMPT_TEMPLATE });
+    // O protocolo vai no mesmo campo, depois de um separador fixo, para não
+    // exigir mudança no servidor (event log: agent_prompt_changed.template).
+    const template = `${S.promptTemplate}${PROTOCOL_SEPARATOR}${S.protocolText}`.slice(0, 4000);
+    const isDefault = S.promptTemplate === DEFAULT_PROMPT_TEMPLATE && S.protocolText === DEFAULT_PROTOCOL;
+    client.send({ type:'agent_prompt', participant_id:S.participantId, template, is_default: isDefault });
   }
   function schedulePromptReport() {
     if (promptReportTimer) clearTimeout(promptReportTimer);
@@ -447,6 +467,9 @@
     const tpl=$('prompt-template'); tpl.value=S.promptTemplate;
     tpl.addEventListener('input', ()=>{ S.promptTemplate=tpl.value; S.save(); refreshTemplateHints(); schedulePromptReport(); });
     $('btn-template-reset').onclick = ()=>{ S.promptTemplate=DEFAULT_PROMPT_TEMPLATE; tpl.value=DEFAULT_PROMPT_TEMPLATE; S.save(); refreshTemplateHints(); schedulePromptReport(); Log.info('Template restaurado para o padrão'); };
+    const prot=$('protocol-text'); prot.value=S.protocolText;
+    prot.addEventListener('input', ()=>{ S.protocolText=prot.value; S.save(); refreshTemplateHints(); schedulePromptReport(); });
+    $('btn-protocol-reset').onclick = ()=>{ S.protocolText=DEFAULT_PROTOCOL; prot.value=DEFAULT_PROTOCOL; S.save(); refreshTemplateHints(); schedulePromptReport(); Log.info('Protocolo restaurado para o padrão'); };
     refreshTemplateHints();
     const think=$('think'); think.checked = S.think !== false;
     think.addEventListener('change', ()=>{ S.think=think.checked; S.save(); });

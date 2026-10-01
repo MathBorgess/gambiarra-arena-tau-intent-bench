@@ -104,7 +104,8 @@ Consultas que todo relatório usa (adapte IDs de sessão):
 | Conteúdo gerado (galeria de SVGs) | `metrics.generatedContent` |
 | Placar final do World | `event_logs` `world_stopped` → `metadata.scores` |
 | Pico de ocupação do World + frame real | `event_logs` `world_snapshot` (ordene por `json_array_length(metadata→agents)`) |
-| Engenharia de prompt | `event_logs` `agent_prompt_changed` (filtre `isDefault=0`) |
+| Engenharia de prompt | `event_logs` `agent_prompt_changed` (filtre `isDefault=0`). A partir de 01/10/2026 o protocolo também é editável: `metadata.template` traz o template, a linha `===== PROTOCOLO =====` e depois o texto do protocolo; `isDefault=1` só quando os dois estão no padrão |
+| Viés de direção no World | `event_logs` `world_snapshot` → `agents[].heading` (radianos, y cresce para baixo: 0 = E, −π/2 = N). Uniforme seria 12,5% por direção; em 22/08 NE teve 23% |
 | Tráfego/min, 429s, IPs, reconexões | log estruturado (`incoming request`, `HTTP_429`, `WS_DEDUP`, `WS_REGISTERED`) |
 
 Guarde séries intermediárias (ex.: requisições/min) em JSON no diretório de
