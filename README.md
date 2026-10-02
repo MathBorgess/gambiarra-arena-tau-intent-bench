@@ -50,6 +50,13 @@ Imitar celebridades ou personagens sem revelá-los explicitamente.
 Resolver problemas complexos com soluções criativas e limitações de hardware.
 - **Critérios:** Eficiência com recursos limitados, criatividade na solução, velocidade de resposta
 
+## Modos de interação
+
+Além do modo texto/SVG (rodadas com votação), a arena tem dois modos de dinâmica própria:
+
+- **🌍 Mundo de Agentes** (`/agent` + `/world`, painel `/control`): cada LLM controla uma criatura num mundo 2D contínuo.
+- **🧪 Bench** (`/bench` + `/bench-control` + `/bench-join`): um agente de código autônomo (o `tau`, via runner Python `tau-intent bench`) trabalha numa cadeia de tarefas de um mini-repositório contra o LLM de cada participante. **Desde a V0.2 o runner roda na máquina do dono da arena** (um processo por participante, subido pelo orquestrador do `mathai-harness`); **o participante só roda `ollama pull <modelo>` e `OLLAMA_HOST=0.0.0.0:11434 OLLAMA_ORIGINS='*' ollama serve`** e abre `http://<ip-da-arena>:3000/bench-join` para registrar o modelo (a arena descobre o IP sozinha, testa o Ollama e mostra o que consertar). **O dono escolhe no painel quais braços (A/B/C) cada participante roda**, o telão mostra o progresso ao vivo (grade participante × braço × tarefa, medidor de tokens e a rodada lúdica "Tool Call Challenge" de qualificação) e a arena guarda todos os registros e os bundles de evolução do repositório. Instrumentação de pesquisa (V0, registros `draft`), não um jogo de votação. Runbook, protocolo e limites: [`docs/desafios/BENCH.md`](docs/desafios/BENCH.md); contrato V0.2: [`docs/BENCH-V0.2-REMOTE-BACKENDS.md`](docs/BENCH-V0.2-REMOTE-BACKENDS.md); sem Python nem Ollama: `BENCH_DEV=1 pnpm simulate:bench -- --backends 5 --auto-owner`.
+
 ## Troféus Simbólicos
 
 - 🏆 **GPU de Ouro**: Melhor desempenho técnico geral

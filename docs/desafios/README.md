@@ -64,6 +64,19 @@ controla uma criatura. Tem mensagens WS próprias (`world_join`, `agent_action`,
 próprios no event log (incluindo `world_snapshot` a cada 5 s com o estado
 completo — mantenha isso em qualquer modo novo dessa família!).
 
+### 4. Modo Bench (`/bench` + `/bench-control`) — **a Receita B aplicada a pesquisa**
+
+Segue a Receita B (gabarito: World), mas o "participante" é um runner Python
+sem LLM-no-navegador: ele roda um agente de código contra o modelo local e
+devolve **registros** (`bench_record`) e um **bundle** de artefatos. O dono
+decide, por participante, quais braços rodar. Contrato do modo, runbook e
+limites em [BENCH.md](BENCH.md); contrato compartilhado entre as equipes em
+[`docs/BENCH-V0-CONTRACT.md`](../BENCH-V0-CONTRACT.md). Peças novas:
+`server/src/core/bench.ts` (engine), `bench-store.ts` (persistência),
+`bench-artifacts.ts` (upload em stream), `telao/src/components/BenchArena.tsx`,
+`BenchControl.tsx`, `ToolCallChallenge.tsx`, `bench-backends.ts` (V0.2: Ollamas dos participantes como *backends*), `client-browser/bench-join.html` e o simulador
+`client-typescript/src/scripts/simulate-bench.ts`.
+
 ---
 
 ## Mapa do repositório (o que mora onde)

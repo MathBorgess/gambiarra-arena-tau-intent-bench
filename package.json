@@ -16,7 +16,8 @@
     "simulate": "pnpm --filter @gambiarra/client-typescript simulate",
     "seed": "pnpm --filter @gambiarra/server seed",
     "docker:up": "docker compose up --build",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "simulate:bench": "pnpm --filter @gambiarra/client-typescript simulate:bench"
   },
   "keywords": [
     "llm",

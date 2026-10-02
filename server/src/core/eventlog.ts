@@ -23,10 +23,24 @@ export type EventType =
   | 'world_joined'
   | 'world_stopped'
   | 'world_snapshot'
-  | 'agent_prompt_changed';
+  | 'agent_prompt_changed'
+  // Bench mode (tau-intent runner x arms A/B/C) — snapshot every 5s with the full state
+  | 'bench_started'
+  | 'bench_assigned'
+  | 'bench_joined'
+  | 'bench_record'
+  | 'bench_cell_done'
+  | 'bench_stopped'
+  | 'bench_artifacts_uploaded'
+  | 'bench_snapshot'
+  | 'bench_error'
+  // Bench V0.2 model backends (hashed host only — never the raw LAN address)
+  | 'bench_backend_registered'
+  | 'bench_backend_probed'
+  | 'bench_backend_toggled';
 
 export type ActorType = 'admin' | 'participant' | 'voter' | 'system';
-export type TargetType = 'session' | 'round' | 'participant' | 'vote' | 'metrics' | 'world';
+export type TargetType = 'session' | 'round' | 'participant' | 'vote' | 'metrics' | 'world' | 'bench';
 
 export interface LogEventParams {
   sessionId?: string;

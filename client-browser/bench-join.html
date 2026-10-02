@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gambiarra Bench — Entrar com seu modelo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/client-assets/theme.css">
+  <style>
+    /* específicos do /bench-join */
+    main { max-width: 760px; }
+    h2 { font-family: var(--display); font-size: 1.05rem; letter-spacing: .06em; text-transform: uppercase; color: var(--text-primary); margin-bottom: .35rem; }
+    h2 .n { display:inline-flex; align-items:center; justify-content:center; width:1.7rem; height:1.7rem; border-radius:50%; margin-right:.5rem;
+      background: var(--accent); color:#180d04; font-family: var(--mono); font-size:.85rem; }
+    .lead { color: var(--text-secondary); font-size: .92rem; margin-bottom: .9rem; }
+    .muted { color: var(--text-muted); font-size: .8rem; }
+    .hint { color: var(--text-muted); font-size: .76rem; margin-top: .3rem; }
+
+    .tabs { display:flex; gap:.4rem; margin-bottom:.6rem; flex-wrap:wrap; }
+    .tab { padding:.35rem .8rem; border-radius:9px; border:1px solid var(--border); background:var(--bg-tertiary); color:var(--text-secondary);
+      font-family:var(--mono); font-size:.76rem; cursor:pointer; }
+    .tab.on { border-color:var(--accent-2); color:var(--accent-2); box-shadow:var(--glow-cyan); }
+
+    .cmd { position:relative; background:var(--bg-primary); border:1px solid var(--border); border-radius:10px; padding:.75rem 3.4rem .75rem .9rem; margin:.4rem 0;
+      font-family:var(--mono); font-size:.8rem; color:var(--accent-2); white-space:pre-wrap; word-break:break-all; user-select:all; }
+    .cmd .copy { position:absolute; top:.4rem; right:.4rem; font-size:.7rem; font-family:var(--mono); padding:.25rem .5rem; border-radius:7px;
+      border:1px solid var(--border); background:var(--bg-tertiary); color:var(--text-secondary); cursor:pointer; user-select:none; }
+    .cmd .copy:hover { border-color:var(--accent-2); color:var(--accent-2); }
+    .cmd-label { font-size:.74rem; color:var(--text-muted); font-family:var(--mono); margin-top:.6rem; text-transform:uppercase; letter-spacing:.06em; }
+
+    .callout { border-radius:var(--radius); padding:.8rem 1rem; font-size:.88rem; margin-top:.7rem; }
+    .callout.warn { background:rgba(255,213,74,.10); border:1px solid var(--warning); color:#ffeaa0; }
+    .callout.bad  { background:rgba(255,59,139,.10); border:1px solid var(--error); color:#ffc0d8; }
+    .callout.ok   { background:rgba(84,255,149,.10); border:1px solid var(--success); color:#c4ffd9; }
+    .callout.info { background:rgba(42,240,223,.07); border:1px solid var(--accent-2); color:var(--text-secondary); }
+    .callout b { color: var(--text-primary); }
+    .callout code { word-break: break-all; }
+
+    .model-row { display:flex; gap:.5rem; }
+    .model-row input { flex:1; min-width:0; }
+    .consent { display:flex; gap:.7rem; align-items:flex-start; font-size:.82rem; color:var(--text-secondary); text-transform:none; letter-spacing:0; font-family:inherit; cursor:pointer; }
+    .consent input { width:auto; margin-top:.2rem; flex:0 0 auto; }
+    details.adv { margin-top:.2rem; }
+    details.adv summary { cursor:pointer; color:var(--text-secondary); font-size:.82rem; margin-bottom:.6rem; }
+
+    .res-head { display:flex; justify-content:space-between; align-items:center; gap:.8rem; flex-wrap:wrap; margin-bottom:.8rem; }
+    .kv { display:grid; grid-template-columns: 9.5rem 1fr; gap:.35rem .8rem; font-size:.84rem; }
+    .kv dt { color:var(--text-muted); font-family:var(--mono); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; padding-top:.1rem; }
+    .kv dd { color:var(--text-primary); font-family:var(--mono); word-break:break-all; }
+    @media (max-width:520px){ .kv { grid-template-columns: 1fr; gap:.1rem; } .kv dd { margin-bottom:.5rem; } }
+    .id-pill { display:inline-block; padding:.2rem .6rem; border-radius:8px; background:var(--bg-input); border:1px solid var(--accent-2); color:var(--accent-2); font-family:var(--mono); font-size:.95rem; user-select:all; }
+    #result { display:none; }
+    #result.on { display:block; }
+    .hw3 { display:grid; grid-template-columns: 2fr 1fr 1fr; gap:.8rem; }
+    @media (max-width:560px){ .hw3 { grid-template-columns: 1fr; } }
+    .actions { margin-top:1.2rem; display:flex; gap:.8rem; flex-wrap:wrap; }
+    #errors { top: 70px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>GAMBIARRA <small>— bench · entrar com seu modelo</small></h1>
+    <div id="status" class="status-badge s-disconnected">Não registrado</div>
+  </header>
+
+  <div id="errors"></div>
+
+  <main>
+    <!-- 1 -->
+    <section class="pad" id="s-prep">
+      <h2><span class="n">1</span>Deixe o Ollama aberto para a arena</h2>
+      <p class="lead">Você só precisa baixar o modelo e ligar o Ollama. <b>Não instala nada da gente e não roda código nosso</b> na sua máquina: o computador da arena é quem conversa com o seu Ollama pela rede.</p>
+      <div class="tabs" id="os-tabs" role="tablist" aria-label="Sistema operacional"></div>
+      <div class="cmd-label">Baixe o modelo (uma vez)</div>
+      <div class="cmd" data-copy="ollama pull qwen2.5-coder:7b">ollama pull qwen2.5-coder:7b<button class="copy" type="button">copiar</button></div>
+      <div class="cmd-label">Ligue o Ollama aberto para a rede <span id="os-name"></span></div>
+      <div id="serve-cmd"></div>
+      <div class="callout warn" id="security">
+        <b>Atenção:</b> <code>OLLAMA_HOST=0.0.0.0</code> abre a API do Ollama, que <b>não tem senha</b>, para todo mundo na rede local enquanto durar o evento.
+        Quando acabar, feche o <code>ollama serve</code> (Ctrl+C).
+      </div>
+    </section>
+
+    <!-- 2 + 3 -->
+    <section class="pad" id="s-form">
+      <h2><span class="n">2</span>Escolha o modelo</h2>
+      <p class="lead">Abra esta página <b>no mesmo computador</b> em que o Ollama roda. O navegador lê a lista de modelos instalados.</p>
+      <div class="fg">
+        <label for="model">Modelo</label>
+        <div class="model-row">
+          <input id="model" list="model-list" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ex: qwen2.5-coder:7b">
+          <datalist id="model-list"></datalist>
+          <button type="button" id="btn-models" class="btn btn-secondary" title="Buscar os modelos instalados" style="padding:.7rem 1rem">⟳</button>
+        </div>
+        <div id="models-msg" class="hint"></div>
+      </div>
+      <div id="cors-help" class="callout warn" style="display:none"></div>
+
+      <h2 style="margin-top:1.4rem"><span class="n">3</span>Quem é você</h2>
+      <div class="fg">
+        <label for="nickname">Apelido</label>
+        <input id="nickname" type="text" maxlength="40" autocomplete="nickname" placeholder="Seu nome ou apelido">
+      </div>
+      <div class="hw3">
+        <div class="fg"><label for="chip">Chip / processador <span class="muted">(opcional)</span></label><input id="chip" type="text" maxlength="80" placeholder="ex: Apple M2, Ryzen 7, i7-1360P"></div>
+        <div class="fg"><label for="ram">RAM (GB) <span class="muted">(opcional)</span></label><input id="ram" type="number" min="1" max="4096" step="1" inputmode="numeric" placeholder="ex: 16"></div>
+        <div class="fg"><label for="accel">GPU <span class="muted">(opcional)</span></label>
+          <select id="accel">
+            <option value="">não informar</option>
+            <option value="metal">Apple (Metal)</option>
+            <option value="cuda">NVIDIA (CUDA)</option>
+            <option value="cpu">só CPU</option>
+            <option value="other">outra</option>
+          </select>
+        </div>
+      </div>
+      <p class="hint">Isso é só o que você <b>declara</b>: a arena não consegue ler o hardware da sua máquina. O navegador também envia o que ele sabe (<span id="browser-hints"></span>) e o Ollama informa versão e quantização do modelo.</p>
+
+      <details class="adv">
+        <summary>Avançado: porta do Ollama</summary>
+        <div class="fg"><label for="port">Porta</label><input id="port" type="number" min="1" max="65535" value="11434"></div>
+      </details>
+
+      <label class="consent" for="consent">
+        <input id="consent" type="checkbox">
+        <span>Entendo que o Ollama da minha máquina ficará acessível, sem senha, na rede do evento, e que a arena vai usar meu modelo para rodar testes enquanto durar o evento.</span>
+      </label>
+
+      <div class="actions">
+        <button id="btn-submit" class="btn btn-primary" type="button">Registrar meu modelo</button>
+      </div>
+    </section>
+
+    <!-- resultado -->
+    <section class="pad" id="result" aria-live="polite">
+      <div class="res-head">
+        <h2 style="margin:0"><span class="n">4</span>Seu modelo na arena</h2>
+        <div id="res-badge" class="status-badge s-connecting">Testando…</div>
+      </div>
+      <dl class="kv" id="res-kv"></dl>
+      <div id="res-problems"></div>
+      <div id="res-fixes"></div>
+      <div id="res-ok" class="callout ok" style="display:none">
+        <b>Tudo certo!</b> A arena enxerga o seu Ollama. Deixe o notebook <b>ligado e na tomada</b> e o Ollama aberto: o dono da arena conecta o seu modelo e inicia os testes. Você não precisa fazer mais nada.
+      </div>
+      <div class="actions">
+        <button id="btn-retest" class="btn btn-primary" type="button">🔄 Testar de novo</button>
+      </div>
+      <p class="hint" id="res-note"></p>
+    </section>
+  </main>
+
+<script type="module">
+  import { $, Err, detectPlatform } from '/client-assets/ui.js';
+
+  const LS = 'gambiarra.bench-join.v1';
+  const store = {
+    get() { try { return JSON.parse(localStorage.getItem(LS) || '{}'); } catch { return {}; } },
+    set(patch) { try { localStorage.setItem(LS, JSON.stringify({ ...this.get(), ...patch })); } catch { /* storage bloqueado: segue sem lembrar */ } },
+  };
+
+  // ---------------------------------------------------------------- comandos por sistema
+  const OS = {
+    mac:     { label: 'macOS',   shell: 'Terminal' },
+    linux:   { label: 'Linux',   shell: 'terminal' },
+    windows: { label: 'Windows', shell: 'PowerShell' },
+  };
+  let os = store.get().os && OS[store.get().os] ? store.get().os : detectPlatform();
+
+  const serveCmd = (port) => os === 'windows'
+    ? `$env:OLLAMA_HOST="0.0.0.0:${port}"; $env:OLLAMA_ORIGINS="*"; ollama serve`
+    : `OLLAMA_HOST=0.0.0.0:${port} OLLAMA_ORIGINS='*' ollama serve`;
+
+  /** Um-liners por sistema para as duas causas de "não alcançável": Ollama preso ao localhost e firewall. */
+  const FIXES = (port) => ({
+    mac: [
+      ['Feche o app do Ollama (ícone na barra de menus → Quit) e rode', serveCmd(port)],
+      ['Se usa o app do Ollama, deixe permanente e reabra o app', `launchctl setenv OLLAMA_HOST "0.0.0.0:${port}"; launchctl setenv OLLAMA_ORIGINS "*"`],
+      ['Firewall: Ajustes do Sistema → Rede → Firewall → Opções → permitir conexões de entrada para o Ollama (ou desligue o firewall durante o evento)', null],
+    ],
+    linux: [
+      ['Pare o Ollama atual e rode', `${serveCmd(port)}`],
+      ['Se usa systemd: sudo systemctl edit ollama, e cole', `[Service]\nEnvironment="OLLAMA_HOST=0.0.0.0:${port}"\nEnvironment="OLLAMA_ORIGINS=*"`],
+      ['Depois reinicie o serviço', 'sudo systemctl restart ollama'],
+      ['Firewall (ufw)', `sudo ufw allow ${port}/tcp`],
+      ['Firewall (firewalld)', `sudo firewall-cmd --add-port=${port}/tcp`],
+    ],
+    windows: [
+      ['Feche o Ollama (ícone na bandeja → Quit) e, na MESMA janela do PowerShell, rode', serveCmd(port)],
+      ['Firewall: PowerShell como Administrador', `New-NetFirewallRule -DisplayName "Ollama LAN" -Direction Inbound -Protocol TCP -LocalPort ${port} -Action Allow`],
+      ['Para deixar permanente (depois reabra o Ollama)', `setx OLLAMA_HOST "0.0.0.0:${port}"; setx OLLAMA_ORIGINS "*"`],
+    ],
+  });
+
+  function cmdBox(text) {
+    const d = document.createElement('div');
+    d.className = 'cmd';
+    d.append(document.createTextNode(text));
+    const b = document.createElement('button');
+    b.className = 'copy'; b.type = 'button'; b.textContent = 'copiar';
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(text); b.textContent = '✓ copiado'; } catch { b.textContent = 'selecione e copie'; }
+      setTimeout(() => (b.textContent = 'copiar'), 2000);
+    };
+    d.append(b);
+    return d;
+  }
+
+  const currentPort = () => {
+    const p = parseInt($('port').value, 10);
+    return p >= 1 && p <= 65535 ? p : 11434;
+  };
+
+  function renderOs() {
+    const tabs = $('os-tabs');
+    tabs.replaceChildren();
+    for (const [k, v] of Object.entries(OS)) {
+      const t = document.createElement('button');
+      t.type = 'button'; t.className = 'tab' + (k === os ? ' on' : ''); t.textContent = v.label; t.setAttribute('role', 'tab');
+      t.onclick = () => { os = k; store.set({ os }); renderOs(); renderFixes(lastResult); };
+      tabs.append(t);
+    }
+    $('os-name').textContent = `(${OS[os].shell})`;
+    $('serve-cmd').replaceChildren(cmdBox(serveCmd(currentPort())));
+    const pull = document.querySelector('[data-copy]');
+    if (pull && !pull.dataset.wired) {
+      pull.dataset.wired = '1';
+      pull.querySelector('.copy').onclick = async (e) => {
+        const b = e.currentTarget;
+        try { await navigator.clipboard.writeText(pull.dataset.copy); b.textContent = '✓ copiado'; } catch { b.textContent = 'selecione e copie'; }
+        setTimeout(() => (b.textContent = 'copiar'), 2000);
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------- dicas do navegador
+  const nav = navigator;
+  const browser = {
+    user_agent: (nav.userAgent || '').slice(0, 300) || null,
+    cores: Number.isFinite(nav.hardwareConcurrency) ? nav.hardwareConcurrency : null,
+    device_memory_gb: Number.isFinite(nav.deviceMemory) ? nav.deviceMemory : null, // Chromium só; arredondado até 8
+  };
+  $('browser-hints').textContent = [
+    browser.cores ? `${browser.cores} núcleos` : null,
+    browser.device_memory_gb ? `≥ ${browser.device_memory_gb} GB de memória` : null,
+    'versão do navegador',
+  ].filter(Boolean).join(', ');
+
+  // ---------------------------------------------------------------- lista de modelos (pelo navegador)
+  const fmtGB = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : Math.round(n / 1e6) + ' MB');
+
+  async function loadModels() {
+    const btn = $('btn-models'), msg = $('models-msg'), help = $('cors-help'), port = currentPort();
+    btn.disabled = true; msg.textContent = `Procurando o Ollama em localhost:${port}…`; help.style.display = 'none';
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    try {
+      const r = await fetch(`http://localhost:${port}/api/tags`, { signal: ctl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const models = ((await r.json()).models || []).filter((m) => m && m.name);
+      const list = $('model-list');
+      list.replaceChildren();
+      for (const m of models) {
+        const o = document.createElement('option');
+        o.value = m.name;
+        o.label = [m.details?.parameter_size, m.details?.quantization_level, m.size ? fmtGB(m.size) : null].filter(Boolean).join(' · ');
+        list.append(o);
+      }
+      if (!models.length) {
+        msg.textContent = 'O Ollama respondeu, mas não há modelos instalados. Rode  ollama pull <modelo>  e toque em ⟳.';
+      } else {
+        msg.textContent = `${models.length} modelo(s) encontrado(s). Toque no campo para escolher.`;
+        if (!$('model').value) $('model').value = store.get().model && models.some((m) => m.name === store.get().model) ? store.get().model : models[0].name;
+      }
+    } catch (e) {
+      msg.textContent = 'Não consegui listar os modelos por aqui. Você ainda pode digitar o nome do modelo (como aparece em  ollama list).';
+      help.style.display = 'block';
+      help.replaceChildren();
+      const h = document.createElement('div');
+      h.innerHTML = '<b>O navegador não conseguiu falar com o Ollama.</b> Ou ele não está rodando, ou falta liberar o CORS (a página vem de outro endereço). Rode, <b>na mesma janela</b>:';
+      help.append(h, cmdBox(serveCmd(port)));
+      const small = document.createElement('div');
+      small.className = 'hint';
+      small.textContent = "O trecho OLLAMA_ORIGINS='*' é o que resolve o CORS. Se o navegador perguntar sobre \"acesso à rede local\" ou \"dispositivos na rede\", permita. Depois toque em ⟳.";
+      help.append(small);
+    } finally {
+      clearTimeout(timer);
+      btn.disabled = false;
+    }
+  }
+
+  // ---------------------------------------------------------------- resultado
+  let backend = null;       // última resposta da arena (POST ou GET)
+  let lastResult = null;
+  let pollTimer = null;
+
+  const RUNNER = {
+    waiting:   ['Aguardando o dono da arena conectar seu modelo', 's-connecting'],
+    connected: ['Conectado à arena, aguardando o início', 's-connected'],
+    running:   ['Rodando testes agora', 's-playing'],
+  };
+
+  function setBadge(text, cls) { const b = $('res-badge'); b.className = 'status-badge ' + cls; b.textContent = text; }
+
+  function kv(rows) {
+    const dl = $('res-kv');
+    dl.replaceChildren();
+    for (const [k, v] of rows) {
+      if (v === null || v === undefined || v === '') continue;
+      const dt = document.createElement('dt'); dt.textContent = k;
+      const dd = document.createElement('dd');
+      if (v instanceof Node) dd.append(v); else dd.textContent = String(v);
+      dl.append(dt, dd);
+    }
+  }
+
+  const shortDigest = (d) => (d ? d.replace(/^sha256:/, '').slice(0, 12) : null);
+
+  function renderFixes(b) {
+    const box = $('res-fixes');
+    box.replaceChildren();
+    if (!b) return;
+    const net = (b.problems || []).some((p) => p.code === 'unreachable' || p.code === 'timeout');
+    if (!net) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'callout info';
+    const t = document.createElement('div');
+    t.innerHTML = `<b>Como resolver no ${OS[os].label}</b> <span class="muted">(troque o sistema nas abas do passo 1)</span>`;
+    wrap.append(t);
+    for (const [label, cmd] of FIXES(b.port || currentPort())[os]) {
+      const l = document.createElement('div');
+      l.className = 'cmd-label'; l.style.textTransform = 'none'; l.textContent = label + (cmd ? ':' : '');
+      wrap.append(l);
+      if (cmd) wrap.append(cmdBox(cmd));
+    }
+    box.append(wrap);
+  }
+
+  function render(b) {
+    backend = b;
+    lastResult = b;
+    $('result').classList.add('on');
+    const problems = b.problems || [];
+    const ok = b.reachable && problems.length === 0;
+    const runner = b.runner || { status: 'waiting' };
+
+    if (ok) { const [txt, cls] = RUNNER[runner.status] || RUNNER.waiting; setBadge(txt, cls); }
+    else if (b.reachable) setBadge('Ollama alcançado, falta o modelo', 's-connecting');
+    else setBadge('Arena não alcança seu Ollama', 's-error');
+
+    const idPill = document.createElement('span'); idPill.className = 'id-pill'; idPill.textContent = b.backend_id;
+    const d = b.model?.details || {};
+    kv([
+      ['backend_id', idPill],
+      ['Modelo', b.model?.id],
+      ['Detalhes', [d.family, d.parameter_size, d.quantization_level].filter(Boolean).join(' · ')],
+      ['Digest', shortDigest(b.model?.digest)],
+      ['Versão do Ollama', b.ollama_version],
+      ['Última checagem', b.last_probe_at ? new Date(b.last_probe_at).toLocaleTimeString() : null],
+      ['Na fila', b.enabled === false ? 'desligado pelo dono da arena' : null],
+    ]);
+
+    const pbox = $('res-problems');
+    pbox.replaceChildren();
+    for (const p of problems) {
+      const c = document.createElement('div');
+      c.className = 'callout ' + (p.code === 'model_missing' ? 'warn' : 'bad');
+      const strong = document.createElement('b');
+      strong.textContent = p.code === 'model_missing' ? 'Modelo não encontrado. ' : p.code === 'timeout' ? 'Sem resposta (firewall?). ' : 'Não alcançável. ';
+      c.append(strong, document.createTextNode(p.fix));
+      pbox.append(c);
+    }
+    renderFixes(b);
+    $('res-ok').style.display = ok ? 'block' : 'none';
+    $('res-note').textContent = 'Se você mandar de novo deste mesmo computador, atualizamos o registro existente em vez de criar outro.';
+    $('btn-submit').textContent = 'Atualizar registro';
+    document.getElementById('status').className = 'status-badge ' + (ok ? 's-connected' : 's-error');
+    document.getElementById('status').textContent = ok ? 'Registrado' : 'Com problema';
+    store.set({ backend_id: b.backend_id });
+    schedulePoll();
+  }
+
+  // Atualiza o status do runner enquanto a página estiver aberta.
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    if (!backend) return;
+    pollTimer = setTimeout(async () => {
+      if (document.hidden) return schedulePoll();
+      try {
+        const r = await fetch(`/bench/backends/${encodeURIComponent(backend.backend_id)}`);
+        if (r.ok) { const b = await r.json(); render(b); return; }
+        if (r.status === 404) { backend = null; return; }
+      } catch { /* rede oscilando: tenta de novo */ }
+      schedulePoll();
+    }, 8000);
+  }
+
+  async function api(method, path, body) {
+    const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+    let data = null;
+    try { data = await r.json(); } catch { /* corpo vazio */ }
+    if (!r.ok) {
+      const msg = r.status === 429 ? 'Calma! Muitas tentativas seguidas — espere um minuto.' : (data && (data.message || data.error)) || `erro ${r.status}`;
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  async function submit() {
+    const nickname = $('nickname').value.trim();
+    const model = $('model').value.trim();
+    if (!nickname) { $('nickname').focus(); return Err.show('Digite um apelido.', 'warning'); }
+    if (!model) { $('model').focus(); return Err.show('Escolha ou digite o modelo.', 'warning'); }
+    if (!$('consent').checked) return Err.show('Marque a caixa de ciência sobre o Ollama aberto na rede.', 'warning');
+
+    const ram = parseFloat($('ram').value);
+    const body = {
+      nickname, model, port: currentPort(),
+      declared_hardware: {
+        chip: $('chip').value.trim() || null,
+        ram_gb: Number.isFinite(ram) && ram > 0 ? ram : null,
+        accel: $('accel').value || null,
+      },
+      browser,
+    };
+    store.set({ nickname, model, chip: body.declared_hardware.chip, ram: $('ram').value, accel: $('accel').value, port: body.port });
+
+    const btn = $('btn-submit');
+    btn.disabled = true; const label = btn.textContent; btn.textContent = 'Testando seu Ollama…';
+    $('result').classList.add('on'); setBadge('Testando…', 's-connecting');
+    try {
+      const res = await api('POST', '/bench/backends', body);
+      render(res);
+      if (res.created === false) $('res-note').textContent = 'Você já tinha este modelo registrado: os dados foram atualizados (mesmo backend_id).';
+      $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      Err.show('Não foi possível registrar: ' + e.message);
+      if (!backend) $('result').classList.remove('on');
+    } finally {
+      btn.disabled = false; if (btn.textContent === 'Testando seu Ollama…') btn.textContent = label;
+    }
+  }
+
+  async function retest() {
+    if (!backend) return submit();
+    const btn = $('btn-retest');
+    btn.disabled = true; btn.textContent = 'Testando…'; setBadge('Testando…', 's-connecting');
+    try {
+      render(await api('POST', `/bench/backends/${encodeURIComponent(backend.backend_id)}/probe`));
+    } catch (e) {
+      Err.show('Não foi possível testar: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = '🔄 Testar de novo';
+    }
+  }
+
+  // ---------------------------------------------------------------- init
+  const saved = store.get();
+  if (saved.nickname) $('nickname').value = saved.nickname;
+  if (saved.chip) $('chip').value = saved.chip;
+  if (saved.ram) $('ram').value = saved.ram;
+  if (saved.accel) $('accel').value = saved.accel;
+  if (saved.port) $('port').value = saved.port;
+  if (saved.model) $('model').value = saved.model;
+  
+
+  $('btn-models').onclick = loadModels;
+  $('btn-submit').onclick = submit;
+  $('btn-retest').onclick = retest;
+  $('port').addEventListener('change', () => { renderOs(); loadModels(); });
+  renderOs();
+  loadModels();
+
+  // Voltou à página: mostra o registro anterior (se a arena ainda o conhece).
+  if (saved.backend_id) {
+    fetch(`/bench/backends/${encodeURIComponent(saved.backend_id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => { if (b) render(b); })
+      .catch(() => {});
+  }
+</script>
+</body>
+</html>
